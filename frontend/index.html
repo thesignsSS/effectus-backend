@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WhatsApp Bot QR Code</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel" aria-live="polite">
+        <div class="header">
+          <p class="eyebrow">Bot WhatsApp</p>
+          <h1>Painel do bot</h1>
+        </div>
+
+        <nav class="tabs" aria-label="Seções do painel">
+          <button class="tab is-active" type="button" data-tab-target="connection">
+            Conexão
+          </button>
+          <button class="tab" type="button" data-tab-target="documents">
+            Documentos
+          </button>
+        </nav>
+
+        <section id="connection-tab" class="tab-panel is-active">
+          <div class="qr-frame">
+            <img id="qr-code" alt="QR Code do WhatsApp" hidden />
+            <div id="success-state" class="success-state" hidden>
+              <span class="success-icon" aria-hidden="true">✓</span>
+              <span>WhatsApp conectado</span>
+            </div>
+            <div id="empty-state" class="empty-state">Aguardando QR Code</div>
+          </div>
+
+          <div class="status-row">
+            <span id="status-dot" class="status-dot"></span>
+            <span id="status-text">Aguardando o backend emitir um QR Code</span>
+          </div>
+        </section>
+
+        <section id="documents-tab" class="tab-panel">
+          <div class="documents-header">
+            <h2>Documentos salvos</h2>
+            <span id="documents-count" class="counter">0</span>
+          </div>
+
+          <div id="documents-list" class="documents-list">
+            <div class="empty-documents">Nenhum documento recebido nesta sessão</div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>
