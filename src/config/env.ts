@@ -49,8 +49,8 @@ export const env: Env = {
   whatsappSessionDir: process.env.WHATSAPP_SESSION_DIR ?? 'auth/whatsapp',
   whatsappAllowedChatName: process.env.WHATSAPP_ALLOWED_CHAT_NAME ?? 'docs_bot',
   whatsappAllowedChatId: process.env.WHATSAPP_ALLOWED_CHAT_ID,
-  qrCodeWebPort: Number(process.env.QR_CODE_WEB_PORT ?? 3334),
-  formSubmissionHttpPort: Number(process.env.FORM_SUBMISSION_HTTP_PORT ?? 3335),
+  qrCodeWebPort: Number(3334),
+  formSubmissionHttpPort: Number(3335),
   formSubmissionMaxBodyMb: Number(process.env.FORM_SUBMISSION_MAX_BODY_MB ?? 50),
   formSubmissionApiKey: process.env.FORM_SUBMISSION_API_KEY,
   documentProcessingConcurrency: Math.max(
