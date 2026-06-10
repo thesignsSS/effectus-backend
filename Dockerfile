@@ -2,6 +2,10 @@ FROM oven/bun:1 AS builder
 
 WORKDIR /app
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates git \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY package*.json ./
 RUN bun install
 
