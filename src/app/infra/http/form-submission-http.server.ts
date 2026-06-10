@@ -54,6 +54,11 @@ export class FormSubmissionHttpServer {
       return;
     }
 
+    if (request.method === 'GET' && request.url === '/api/elias') {
+      this.sendJson(response, 200, { message: 'Elias Lindo' });
+      return;
+    }
+
     if (request.method !== 'POST' || request.url !== '/api/form-submissions') {
       this.sendJson(response, 404, { error: 'Endpoint não encontrado' });
       return;
