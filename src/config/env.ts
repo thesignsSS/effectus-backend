@@ -14,6 +14,9 @@ export interface Env {
   whatsappAllowedChatName: string;
   whatsappAllowedChatId?: string;
   qrCodeWebPort: number;
+  formSubmissionHttpPort: number;
+  formSubmissionMaxBodyMb: number;
+  formSubmissionApiKey?: string;
   documentProcessingConcurrency: number;
   storageProvider: StorageProviderMode;
   oneDriveProvider: OneDriveProviderMode;
@@ -47,6 +50,9 @@ export const env: Env = {
   whatsappAllowedChatName: process.env.WHATSAPP_ALLOWED_CHAT_NAME ?? 'docs_bot',
   whatsappAllowedChatId: process.env.WHATSAPP_ALLOWED_CHAT_ID,
   qrCodeWebPort: Number(process.env.QR_CODE_WEB_PORT ?? 3334),
+  formSubmissionHttpPort: Number(process.env.FORM_SUBMISSION_HTTP_PORT ?? 3335),
+  formSubmissionMaxBodyMb: Number(process.env.FORM_SUBMISSION_MAX_BODY_MB ?? 50),
+  formSubmissionApiKey: process.env.FORM_SUBMISSION_API_KEY,
   documentProcessingConcurrency: Math.max(
     1,
     Number(process.env.DOCUMENT_PROCESSING_CONCURRENCY ?? 1),

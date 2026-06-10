@@ -37,7 +37,7 @@ export function generateDocumentFileName(input: {
   const timestamp = input.createdAt.toISOString().replace(/[:.]/g, '-');
   const sender = input.sender.replace(/\D/g, '') || 'unknown';
   const messageId = input.messageId
-    ? input.messageId.replace(/[^\w\-]+/g, '').slice(-10)
+    ? input.messageId.replace(/[^\w-]+/g, '').slice(-10)
     : undefined;
   const clientName = input.clientName ? sanitizeFilenamePart(input.clientName) : undefined;
   const brokerName = input.brokerName ? sanitizeFilenamePart(input.brokerName) : undefined;
@@ -50,6 +50,6 @@ export function generateDocumentFileName(input: {
 
 function sanitizeFilenamePart(value: string): string {
   return value
-    .replace(/[^\w.\-]+/g, '_')
+    .replace(/[^\w.-]+/g, '_')
     .replace(/^_+|_+$/g, '');
 }

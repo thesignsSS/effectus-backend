@@ -17,4 +17,8 @@ export class WhatsAppService {
   sendText(chatId: string, text: string): Promise<void> {
     return this.messagingProvider.sendText(chatId, text);
   }
+
+  sendTextToConfiguredChat(text: string): Promise<void> {
+    return this.messagingProvider.sendTextToConfiguredChat(text);
+  }
 }

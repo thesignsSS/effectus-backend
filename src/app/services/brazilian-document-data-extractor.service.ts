@@ -46,7 +46,7 @@ export class BrazilianDocumentDataExtractor implements DocumentDataExtractor {
   }
 
   private findRg(text: string): string | undefined {
-    const labelMatch = text.match(/\b(?:RG|REGISTRO GERAL|IDENTIDADE)\D{0,20}([0-9X.\-]{5,16})\b/);
+    const labelMatch = text.match(/\b(?:RG|REGISTRO GERAL|IDENTIDADE)\D{0,20}([0-9X.-]{5,16})\b/);
 
     if (labelMatch?.[1]) {
       return labelMatch[1].replace(/\s+/g, '');

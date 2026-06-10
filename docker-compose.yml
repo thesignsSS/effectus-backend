@@ -1,0 +1,19 @@
+services:
+  bot-wpp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bot-wpp
+    environment:
+      NODE_ENV: production
+      WHATSAPP_SESSION_DIR: /app/auth/whatsapp
+      TEMP_DIR: /app/tmp/uploads
+      LOCAL_DOCUMENTS_ROOT: /app/docs
+      QR_CODE_WEB_PORT: ${QR_CODE_WEB_PORT:-3334}
+      FORM_SUBMISSION_HTTP_PORT: ${FORM_SUBMISSION_HTTP_PORT:-3335}
+    ports:
+      - "${QR_CODE_WEB_PORT:-3334}:${QR_CODE_WEB_PORT:-3334}"
+      - "${FORM_SUBMISSION_HTTP_PORT:-3335}:${FORM_SUBMISSION_HTTP_PORT:-3335}"
+    volumes:
+      - ./auth:/app/auth
+      - ./tmp:/app/tmp

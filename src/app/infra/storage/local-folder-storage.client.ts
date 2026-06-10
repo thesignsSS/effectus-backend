@@ -31,12 +31,20 @@ export class LocalFolderStorageClient implements StorageProvider {
 }
 
 function sanitizePathSegment(value: string): string {
-  const sanitized = value
+  const sanitized = replaceControlCharacters(value)
     .normalize('NFC')
-    .replace(/[<>:"/\\|?*\u0000-\u001F]+/g, '_')
+    .replace(/[<>:"/\\|?*]+/g, '_')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^\.+|\.+$/g, '');
 
   return sanitized || 'Sem nome';
+}
+
+function replaceControlCharacters(value: string): string {
+  return [...value]
+    .map((character) =>
+      (character.codePointAt(0) ?? 0) < 32 ? '_' : character,
+    )
+    .join('');
 }

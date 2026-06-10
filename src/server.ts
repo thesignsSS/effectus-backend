@@ -2,6 +2,7 @@ import { WhatsAppController } from './app/controllers/whatsapp.controller.js';
 import { fileURLToPath } from 'node:url';
 import { NoopAutomationClient } from './app/infra/automation/noop-automation.client.js';
 import { ConsoleLogger } from './app/infra/logger/logger.js';
+import { FormSubmissionHttpServer } from './app/infra/http/form-submission-http.server.js';
 import { MockOneDriveClient } from './app/infra/onedrive/mock-onedrive.client.js';
 import { OneDriveClient } from './app/infra/onedrive/onedrive.client.js';
 import { OpenRouterCustomerRegistrationClient } from './app/infra/llm/openrouter-customer-registration.client.js';
@@ -24,6 +25,7 @@ import { GenerateCustomerRegistrationReportUseCase } from './app/use-cases/gener
 import { ProcessAdditionalInfoUseCase } from './app/use-cases/process-additional-info.usecase.js';
 import { ExtractDocumentInfoUseCase } from './app/use-cases/extract-document-info.usecase.js';
 import { ProcessIncomingDocumentUseCase } from './app/use-cases/process-incoming-document.usecase.js';
+import { ProcessFormSubmissionUseCase } from './app/use-cases/process-form-submission.usecase.js';
 import { RegisterDocumentUseCase } from './app/use-cases/register-document.usecase.js';
 import { env } from './config/env.js';
 
@@ -71,6 +73,20 @@ export function buildApp(): WhatsAppController {
           logger,
         );
   const whatsAppService = new WhatsAppService(messagingProvider);
+  const processFormSubmission = new ProcessFormSubmissionUseCase(
+    oneDriveService,
+    whatsAppService,
+    logger,
+  );
+  new FormSubmissionHttpServer(
+    {
+      port: env.formSubmissionHttpPort,
+      maxBodyBytes: env.formSubmissionMaxBodyMb * 1024 * 1024,
+      apiKey: env.formSubmissionApiKey,
+    },
+    processFormSubmission,
+    logger,
+  ).start();
   const remittanceSessionService = new RemittanceSessionService();
   const customerRegistrationExtractor = new OpenRouterCustomerRegistrationClient(
     {

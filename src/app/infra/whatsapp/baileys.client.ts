@@ -129,6 +129,11 @@ export class BaileysClient implements MessagingProvider {
     }
   }
 
+  async sendTextToConfiguredChat(text: string): Promise<void> {
+    const chatId = await this.getConfiguredChatId();
+    await this.sendText(chatId, text);
+  }
+
   private async toIncomingMessage(message: WAMessage): Promise<IncomingMessage | null> {
     if (message.key.id && this.sentMessageIds.delete(message.key.id)) {
       this.logger.info('Mensagem ignorada porque foi enviada automaticamente pelo bot', {
@@ -309,6 +314,32 @@ export class BaileysClient implements MessagingProvider {
       });
       return undefined;
     }
+  }
+
+  private async getConfiguredChatId(): Promise<string> {
+    if (this.config.allowedChatId) {
+      return this.config.allowedChatId;
+    }
+
+    if (!this.socket) {
+      throw new Error('WhatsApp socket is not connected');
+    }
+
+    const groups = await this.socket.groupFetchAllParticipating();
+    const group = Object.values(groups).find(
+      (candidate) =>
+        this.normalizeChatName(candidate.subject) ===
+        this.normalizeChatName(this.config.allowedChatName),
+    );
+
+    if (!group) {
+      throw new Error(
+        `Grupo configurado não encontrado: ${this.config.allowedChatName}`,
+      );
+    }
+
+    this.groupNameCache.set(group.id, group.subject);
+    return group.id;
   }
 
   private normalizeChatName(chatName?: string): string {
