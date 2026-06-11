@@ -1,6 +1,7 @@
 import { BrokerClientStore } from '../domain/interfaces/broker-client-store.interface.js';
 import {
   ProposalDocumentInput,
+  ProposalStatusInfo,
   ProposalStore,
 } from '../domain/interfaces/proposal-store.interface.js';
 import { FileExtension } from '../domain/constants/file.constants.js';
@@ -22,6 +23,7 @@ export interface FormSubmissionDocument {
 export interface FormSubmissionInput {
   brokerUserId?: string;
   brokerName: string;
+  brokerPhone?: string;
   clientName: string;
   formData: Record<string, unknown>;
   documents: FormSubmissionDocument[];
@@ -30,6 +32,8 @@ export interface FormSubmissionInput {
 export interface FormSubmissionResult {
   proposalCode?: string;
   proposalId?: string;
+  proposalStatus?: string;
+  proposalStatusLabel?: string;
   savedClient: boolean;
   uploadedLocations: string[];
 }
@@ -147,6 +151,8 @@ export class ProcessFormSubmissionUseCase {
     return {
       proposalCode: savedProposal?.proposalCode,
       proposalId: savedProposal?.id,
+      proposalStatus: savedProposal?.status,
+      proposalStatusLabel: savedProposal?.statusLabel,
       savedClient,
       uploadedLocations,
     };
@@ -157,6 +163,7 @@ export class ProcessFormSubmissionUseCase {
       'Dados do formulário',
       `Recebido em: ${createdAt.toISOString()}`,
       `Corretor: ${input.brokerName}`,
+      input.brokerPhone ? `WhatsApp do corretor: ${input.brokerPhone}` : undefined,
       `Cliente: ${input.clientName}`,
       '',
       ...Object.entries(input.formData).map(
@@ -216,7 +223,7 @@ export class ProcessFormSubmissionUseCase {
       sizeBytes: number;
       uploadedAt: string;
     }>,
-  ): Promise<{ id: string; proposalCode: string } | undefined> {
+  ): Promise<({ id: string; proposalCode: string } & ProposalStatusInfo) | undefined> {
     if (!input.brokerUserId) {
       this.logger.warn('Proposta nao foi persistida: brokerUserId ausente', {
         brokerName: input.brokerName,
@@ -228,6 +235,13 @@ export class ProcessFormSubmissionUseCase {
     return this.proposalStore.create({
       brokerUserId: input.brokerUserId,
       brokerName: input.brokerName,
+      brokerPhone: input.brokerPhone ?? findFirstString(input.formData, [
+        'WhatsApp do Corretor',
+        'WPP do Corretor',
+        'Telefone do Corretor',
+        'brokerPhone',
+        'corretorWpp',
+      ]),
       clientName: input.clientName,
       clientCpf: findFirstString(input.formData, [
         'CPF do Cliente',

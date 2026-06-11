@@ -7,7 +7,11 @@ import { timingSafeEqual } from 'node:crypto';
 import { URL } from 'node:url';
 import { Logger } from '../../domain/interfaces/logger.interface.js';
 import { ProfileStore } from '../../domain/interfaces/profile-store.interface.js';
-import { ProposalStore } from '../../domain/interfaces/proposal-store.interface.js';
+import {
+  PROPOSAL_STATUS_OPTIONS,
+  ProposalStatus,
+  ProposalStore,
+} from '../../domain/interfaces/proposal-store.interface.js';
 import { OneDriveService } from '../../services/onedrive.service.js';
 import {
   FormSubmissionDocument,
@@ -88,6 +92,13 @@ export class FormSubmissionHttpServer {
       return;
     }
 
+    if (request.method === 'GET' && requestUrl.pathname === '/api/proposals/statuses') {
+      this.sendJson(response, 200, {
+        items: PROPOSAL_STATUS_OPTIONS,
+      });
+      return;
+    }
+
     if (request.method === 'GET' && requestUrl.pathname === '/api/proposals') {
       await this.handleListProposals(requestUrl, response);
       return;
@@ -163,6 +174,8 @@ export class FormSubmissionHttpServer {
         ok: true,
         proposalId: result.proposalId ?? null,
         proposalCode: result.proposalCode ?? null,
+        status: result.proposalStatus ?? null,
+        statusLabel: result.proposalStatusLabel ?? null,
         savedClient: result.savedClient,
         uploadedFiles: result.uploadedLocations.length,
         locations: result.uploadedLocations,
@@ -268,6 +281,9 @@ export class FormSubmissionHttpServer {
       'corretorUserId',
     );
     const brokerName = readRequiredString(payload, 'brokerName', 'corretor');
+    const brokerPhone =
+      readOptionalString(payload, 'brokerPhone', 'corretorWpp') ??
+      readOptionalString(payload, 'whatsappCorretor', 'wppCorretor');
     const clientName = readRequiredString(payload, 'clientName', 'cliente');
     const documents = readDocuments(payload.documents);
     const formData = readFormData(payload);
@@ -275,6 +291,7 @@ export class FormSubmissionHttpServer {
     return {
       brokerUserId,
       brokerName,
+      brokerPhone,
       clientName,
       formData,
       documents,
@@ -392,11 +409,15 @@ export class FormSubmissionHttpServer {
     const payload = await this.readJsonBody(request);
     const brokerUserId = readRequiredString(payload, 'brokerUserId', 'corretorUserId');
     const proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
+    const status = readOptionalProposalStatus(payload);
 
     try {
-      await this.proposalStore.update({
+      const result = await this.proposalStore.update({
         proposalId,
         brokerUserId,
+        brokerPhone:
+          readOptionalString(payload, 'brokerPhone', 'corretorWpp') ??
+          readOptionalString(payload, 'whatsappCorretor', 'wppCorretor'),
         clientName: readOptionalString(payload, 'clientName', 'cliente'),
         clientCpf: readOptionalString(payload, 'clientCpf', 'cpfCliente'),
         clientEmail: readOptionalString(payload, 'clientEmail', 'emailCliente'),
@@ -406,12 +427,26 @@ export class FormSubmissionHttpServer {
         propertyState: readOptionalString(payload, 'propertyState', 'ufImovel'),
         additionalInfo: readOptionalString(payload, 'additionalInfo', 'informacoesAdicionais'),
         formData: readOptionalObject(payload, 'formData', 'data'),
+        status,
       });
 
-      this.sendJson(response, 200, { ok: true });
+      this.sendJson(response, 200, {
+        ok: true,
+        proposalId,
+        ...(result
+          ? {
+              status: result.status,
+              statusLabel: result.statusLabel,
+            }
+          : {}),
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error('Falha ao atualizar proposta', { error: message, proposalId });
+      this.logger.error('Falha ao atualizar proposta', {
+        error: message,
+        proposalId,
+        brokerUserId,
+      });
       this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
     }
   }
@@ -696,6 +731,14 @@ export class FormSubmissionHttpServer {
   }
 
   private statusFromError(message: string): number {
+    if (message.includes('Apenas admin')) {
+      return 403;
+    }
+
+    if (message.includes('não encontrada') || message.includes('não encontrado')) {
+      return 404;
+    }
+
     if (
       message.includes('inválido') ||
       message.includes('obrigatório') ||
@@ -749,6 +792,58 @@ function readOptionalObject(
   }
 
   return value;
+}
+
+function readOptionalProposalStatus(payload: JsonObject): ProposalStatus | undefined {
+  const value = payload.status ?? payload.situacao;
+
+  if (typeof value !== 'string' || !value.trim()) {
+    return undefined;
+  }
+
+  const rawStatus = value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (rawStatus === 'em analise' || rawStatus === 'em_analise') {
+    return 'em_analise';
+  }
+
+  if (rawStatus === 'pendente') {
+    return 'pendente';
+  }
+
+  if (rawStatus === 'condicionado') {
+    return 'condicionado';
+  }
+
+  if (rawStatus === 'reprovado') {
+    return 'reprovado';
+  }
+
+  if (rawStatus === 'aprovado') {
+    return 'aprovado';
+  }
+
+  if (rawStatus === 'in progress') {
+    return 'em_analise';
+  }
+
+  if (rawStatus === 'approved' || rawStatus === 'aprovada') {
+    return 'aprovado';
+  }
+
+  if (rawStatus === 'rejected' || rawStatus === 'rejeitada') {
+    return 'reprovado';
+  }
+
+  throw new Error(
+    'Status inválido. Use em_analise, pendente, condicionado, reprovado ou aprovado',
+  );
 }
 
 function readDocuments(value: JsonValue | undefined): FormSubmissionDocument[] {

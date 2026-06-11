@@ -7,9 +7,35 @@ export interface ProposalDocumentInput {
   uploadedAt: string;
 }
 
+export type ProposalStatus =
+  | 'em_analise'
+  | 'pendente'
+  | 'condicionado'
+  | 'reprovado'
+  | 'aprovado';
+
+export interface ProposalStatusInfo {
+  status: ProposalStatus;
+  statusLabel: string;
+}
+
+export interface ProposalStatusOption {
+  value: ProposalStatus;
+  label: string;
+}
+
+export const PROPOSAL_STATUS_OPTIONS: ProposalStatusOption[] = [
+  { value: 'em_analise', label: 'Em análise' },
+  { value: 'pendente', label: 'Pendente' },
+  { value: 'condicionado', label: 'Condicionado' },
+  { value: 'reprovado', label: 'Reprovado' },
+  { value: 'aprovado', label: 'Aprovado' },
+];
+
 export interface CreateProposalInput {
   brokerUserId: string;
   brokerName: string;
+  brokerPhone?: string;
   clientName: string;
   clientCpf?: string;
   clientEmail?: string;
@@ -25,6 +51,8 @@ export interface CreateProposalInput {
 export interface ProposalListItem {
   id: string;
   proposalCode: string;
+  status: ProposalStatus;
+  statusLabel: string;
   clientName: string;
   brokerName: string;
   propertyType: string;
@@ -46,6 +74,7 @@ export interface ProposalDocument {
 export interface UpdateProposalInput {
   proposalId: string;
   brokerUserId: string;
+  brokerPhone?: string;
   clientName?: string;
   clientCpf?: string;
   clientEmail?: string;
@@ -55,6 +84,7 @@ export interface UpdateProposalInput {
   propertyState?: string;
   additionalInfo?: string;
   formData?: Record<string, unknown>;
+  status?: ProposalStatus;
 }
 
 export interface ProposalDocumentContext {
@@ -90,7 +120,10 @@ export interface ProposalDocumentLookup {
 export interface ProposalDetail {
   id: string;
   proposalCode: string;
+  status: ProposalStatus;
+  statusLabel: string;
   brokerName: string;
+  brokerPhone: string;
   createdAt: string;
   client: {
     name: string;
@@ -116,8 +149,8 @@ export interface ProposalListResult {
 }
 
 export interface ProposalStore {
-  create(input: CreateProposalInput): Promise<{ id: string; proposalCode: string }>;
-  update(input: UpdateProposalInput): Promise<void>;
+  create(input: CreateProposalInput): Promise<{ id: string; proposalCode: string } & ProposalStatusInfo>;
+  update(input: UpdateProposalInput): Promise<ProposalStatusInfo | undefined>;
   listByBroker(input: {
     brokerUserId: string;
     ownerBrokerUserId?: string;

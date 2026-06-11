@@ -8,6 +8,9 @@ import {
   ProposalListItem,
   ProposalListResult,
   ProposalStore,
+  ProposalStatus,
+  ProposalStatusInfo,
+  PROPOSAL_STATUS_OPTIONS,
   RenameProposalDocumentInput,
   UpdateProposalInput,
 } from '../../domain/interfaces/proposal-store.interface.js';
@@ -22,7 +25,9 @@ type UserRole = 'admin' | 'broker';
 type ProposalRow = {
   id: string;
   proposal_number: number;
+  status: ProposalStatus | null;
   broker_name: string | null;
+  broker_phone: string | null;
   client_name: string | null;
   client_cpf: string | null;
   client_email: string | null;
@@ -63,12 +68,14 @@ export class SupabaseProposalStore implements ProposalStore {
     });
   }
 
-  async create(input: CreateProposalInput): Promise<{ id: string; proposalCode: string }> {
+  async create(input: CreateProposalInput): Promise<{ id: string; proposalCode: string } & ProposalStatusInfo> {
     const { data: proposal, error: proposalError } = await this.client
       .from('proposals')
       .insert({
         broker_user_id: input.brokerUserId,
+        status: 'em_analise',
         broker_name: input.brokerName,
+        broker_phone: input.brokerPhone ?? null,
         client_name: input.clientName,
         client_cpf: input.clientCpf ?? null,
         client_email: input.clientEmail ?? null,
@@ -79,7 +86,7 @@ export class SupabaseProposalStore implements ProposalStore {
         additional_info: input.additionalInfo ?? null,
         form_data: input.formData,
       })
-      .select('id, proposal_number')
+      .select('id, proposal_number, status')
       .single();
 
     if (proposalError || !proposal) {
@@ -107,14 +114,16 @@ export class SupabaseProposalStore implements ProposalStore {
     return {
       id: proposal.id,
       proposalCode: formatProposalCode(proposal.proposal_number),
+      ...toStatusInfo(proposal.status),
     };
   }
 
-  async update(input: UpdateProposalInput): Promise<void> {
+  async update(input: UpdateProposalInput): Promise<ProposalStatusInfo | undefined> {
     const access = await this.resolveAccess(input.brokerUserId);
     const payload: Record<string, unknown> = {};
 
     if (input.clientName !== undefined) payload.client_name = input.clientName;
+    if (input.brokerPhone !== undefined) payload.broker_phone = input.brokerPhone;
     if (input.clientCpf !== undefined) payload.client_cpf = input.clientCpf;
     if (input.clientEmail !== undefined) payload.client_email = input.clientEmail;
     if (input.clientPhone !== undefined) payload.client_phone = input.clientPhone;
@@ -123,25 +132,32 @@ export class SupabaseProposalStore implements ProposalStore {
     if (input.propertyState !== undefined) payload.property_state = input.propertyState;
     if (input.additionalInfo !== undefined) payload.additional_info = input.additionalInfo;
     if (input.formData !== undefined) payload.form_data = input.formData;
+    if (input.status !== undefined && !access.isAdmin) {
+      throw new Error('Apenas admin pode alterar o status da proposta');
+    }
+    if (input.status !== undefined) payload.status = input.status;
 
     if (Object.keys(payload).length === 0) {
-      return;
+      return undefined;
     }
 
-    let query = this.client
-      .from('proposals')
-      .update(payload)
-      .eq('id', input.proposalId);
+    let query = this.client.from('proposals').update(payload).eq('id', input.proposalId);
 
     if (!access.isAdmin) {
       query = query.eq('broker_user_id', input.brokerUserId);
     }
 
-    const { error } = await query;
+    const { data, error } = await query.select('status').single();
 
     if (error) {
+      if (error.code === 'PGRST116') {
+        throw new Error('Proposta não encontrada');
+      }
+
       throw new Error(`Supabase proposal update failed: ${error.message}`);
     }
+
+    return input.status !== undefined ? toStatusInfo(data.status) : undefined;
   }
 
   async listByBroker(input: {
@@ -157,7 +173,7 @@ export class SupabaseProposalStore implements ProposalStore {
     let query = this.client
       .from('proposals')
       .select(
-        'id, proposal_number, broker_name, client_name, property_type, created_at, proposal_documents(count)',
+        'id, proposal_number, status, broker_name, client_name, property_type, created_at, proposal_documents(count)',
         { count: 'exact' },
       )
       .order('created_at', { ascending: false })
@@ -196,7 +212,7 @@ export class SupabaseProposalStore implements ProposalStore {
     }
 
     const items = ((data as Array<
-      Pick<ProposalRow, 'id' | 'proposal_number' | 'broker_name' | 'client_name' | 'property_type' | 'created_at'> & {
+      Pick<ProposalRow, 'id' | 'proposal_number' | 'status' | 'broker_name' | 'client_name' | 'property_type' | 'created_at'> & {
         proposal_documents?: Array<{ count: number | null }>;
       }
     > | null) ?? []).map((item) => this.toProposalListItem(item));
@@ -219,7 +235,9 @@ export class SupabaseProposalStore implements ProposalStore {
       .select(`
         id,
         proposal_number,
+        status,
         broker_name,
+        broker_phone,
         client_name,
         client_cpf,
         client_email,
@@ -406,13 +424,16 @@ export class SupabaseProposalStore implements ProposalStore {
   }
 
   private toProposalListItem(
-    row: Pick<ProposalRow, 'id' | 'proposal_number' | 'broker_name' | 'client_name' | 'property_type' | 'created_at'> & {
+    row: Pick<ProposalRow, 'id' | 'proposal_number' | 'status' | 'broker_name' | 'client_name' | 'property_type' | 'created_at'> & {
       proposal_documents?: Array<{ count: number | null }>;
     },
   ): ProposalListItem {
+    const status = toStatusInfo(row.status);
+
     return {
       id: row.id,
       proposalCode: formatProposalCode(row.proposal_number),
+      ...status,
       clientName: row.client_name ?? '',
       brokerName: row.broker_name ?? '',
       propertyType: row.property_type ?? '',
@@ -424,10 +445,14 @@ export class SupabaseProposalStore implements ProposalStore {
   private toProposalDetail(
     row: ProposalRow & { proposal_documents?: ProposalDocumentRow[] | null },
   ): ProposalDetail {
+    const status = toStatusInfo(row.status);
+
     return {
       id: row.id,
       proposalCode: formatProposalCode(row.proposal_number),
+      ...status,
       brokerName: row.broker_name ?? '',
+      brokerPhone: row.broker_phone ?? '',
       createdAt: row.created_at,
       client: {
         name: row.client_name ?? '',
@@ -493,6 +518,23 @@ export class SupabaseProposalStore implements ProposalStore {
 function formatProposalCode(proposalNumber: number): string {
   return `RB-${String(proposalNumber).padStart(4, '0')}`;
 }
+
+function toStatusInfo(status: string | null | undefined): ProposalStatusInfo {
+  const normalized = isProposalStatus(status) ? status : 'em_analise';
+
+  return {
+    status: normalized,
+    statusLabel: proposalStatusLabels.get(normalized) ?? 'Em análise',
+  };
+}
+
+function isProposalStatus(status: string | null | undefined): status is ProposalStatus {
+  return proposalStatusLabels.has(status as ProposalStatus);
+}
+
+const proposalStatusLabels = new Map(
+  PROPOSAL_STATUS_OPTIONS.map((status) => [status.value, status.label]),
+);
 
 function escapeLike(value: string): string {
   return value.replace(/[,%]/g, '');
