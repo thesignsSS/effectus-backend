@@ -24,7 +24,7 @@ function renderConnection(status) {
     qrCode.hidden = true;
     successState.hidden = false;
     emptyState.hidden = true;
-    setStatus('Dispositivo conectado e pronto para receber documentos', 'ready');
+    setStatus('Dispositivo conectado e pronto para enviar avisos ao grupo', 'ready');
     return;
   }
 

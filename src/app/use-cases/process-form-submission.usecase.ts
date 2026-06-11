@@ -117,11 +117,15 @@ export class ProcessFormSubmissionUseCase {
     try {
       await this.whatsAppService.sendTextToConfiguredChat(
         [
-          'Arquivos recebidos com sucesso no storage.',
+          'Nova proposta recebida.',
+          savedProposal?.proposalCode
+            ? `Proposta: ${savedProposal.proposalCode}`
+            : undefined,
           `Corretor: ${input.brokerName}`,
           `Cliente: ${input.clientName}`,
-          `Arquivos enviados: ${uploadedLocations.length}`,
-        ].join('\n'),
+          `Documentos enviados: ${input.documents.length}`,
+          `Arquivos salvos: ${uploadedLocations.length}`,
+        ].filter((line): line is string => Boolean(line)).join('\n'),
       );
     } catch (error) {
       this.logger.warn('Aviso de submissão não enviado pelo WhatsApp', {
