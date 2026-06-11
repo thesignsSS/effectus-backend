@@ -1,7 +1,10 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { randomUUID } from 'node:crypto';
 import {
   CreateProposalInput,
   DeleteProposalDocumentInput,
+  ProposalComment,
+  ProposalCommentType,
   ProposalDetail,
   ProposalDocumentContext,
   ProposalDocumentLookup,
@@ -36,6 +39,8 @@ type ProposalRow = {
   property_city: string | null;
   property_state: string | null;
   additional_info: string | null;
+  pending_reason: string | null;
+  proposal_comments: unknown;
   form_data: Record<string, unknown> | null;
   created_at: string;
 };
@@ -120,7 +125,15 @@ export class SupabaseProposalStore implements ProposalStore {
 
   async update(input: UpdateProposalInput): Promise<ProposalStatusInfo | undefined> {
     const access = await this.resolveAccess(input.brokerUserId);
+    const currentProposal = await this.getProposalForUpdate(
+      input.proposalId,
+      access.isAdmin ? undefined : input.brokerUserId,
+    );
     const payload: Record<string, unknown> = {};
+
+    if (!currentProposal) {
+      throw new Error('Proposta não encontrada');
+    }
 
     if (input.clientName !== undefined) payload.client_name = input.clientName;
     if (input.brokerPhone !== undefined) payload.broker_phone = input.brokerPhone;
@@ -132,10 +145,78 @@ export class SupabaseProposalStore implements ProposalStore {
     if (input.propertyState !== undefined) payload.property_state = input.propertyState;
     if (input.additionalInfo !== undefined) payload.additional_info = input.additionalInfo;
     if (input.formData !== undefined) payload.form_data = input.formData;
-    if (input.status !== undefined && !access.isAdmin) {
-      throw new Error('Apenas admin pode alterar o status da proposta');
+    if (input.pendingReason !== undefined && !access.isAdmin) {
+      throw new Error('Apenas admin pode registrar o motivo da pendência');
     }
-    if (input.status !== undefined) payload.status = input.status;
+
+    const currentStatus = toStatusInfo(currentProposal.status).status;
+    const nextStatus = input.status;
+    const nextComments = normalizeProposalComments(currentProposal.proposal_comments);
+
+    if (nextStatus !== undefined) {
+      if (access.isAdmin) {
+        if (nextStatus === 'pendente') {
+          const pendingReason = input.pendingReason?.trim();
+
+          if (!pendingReason) {
+            throw new Error('Informe o motivo da pendência');
+          }
+
+          payload.pending_reason = pendingReason;
+          nextComments.push(
+            buildProposalComment({
+              authorName: getAccessDisplayName(access),
+              authorRole: access.role,
+              message: pendingReason,
+              type: 'pending_reason',
+            }),
+          );
+        } else if (currentStatus === 'pendente') {
+          payload.pending_reason = null;
+        }
+      } else {
+        const canResubmit = currentStatus === 'pendente' && nextStatus === 'em_analise';
+
+        if (!canResubmit) {
+          throw new Error('Apenas admin pode alterar o status da proposta');
+        }
+
+        payload.pending_reason = null;
+        nextComments.push(
+          buildProposalComment({
+            authorName: getAccessDisplayName(access),
+            authorRole: access.role,
+            message: input.commentMessage?.trim() || 'Proposta reenviada para análise.',
+            type: 'resubmission',
+          }),
+        );
+      }
+
+      payload.status = nextStatus;
+    }
+
+    if (input.commentMessage?.trim()) {
+      const shouldAppendStandaloneComment = !(
+        !access.isAdmin &&
+        currentStatus === 'pendente' &&
+        nextStatus === 'em_analise'
+      );
+
+      if (shouldAppendStandaloneComment) {
+        nextComments.push(
+          buildProposalComment({
+            authorName: getAccessDisplayName(access),
+            authorRole: access.role,
+            message: input.commentMessage.trim(),
+            type: 'comment',
+          }),
+        );
+      }
+    }
+
+    if (nextComments.length > 0) {
+      payload.proposal_comments = nextComments;
+    }
 
     if (Object.keys(payload).length === 0) {
       return undefined;
@@ -246,6 +327,8 @@ export class SupabaseProposalStore implements ProposalStore {
         property_city,
         property_state,
         additional_info,
+        pending_reason,
+        proposal_comments,
         form_data,
         created_at,
         proposal_documents (
@@ -454,6 +537,7 @@ export class SupabaseProposalStore implements ProposalStore {
       brokerName: row.broker_name ?? '',
       brokerPhone: row.broker_phone ?? '',
       createdAt: row.created_at,
+      pendingReason: row.pending_reason ?? '',
       client: {
         name: row.client_name ?? '',
         cpf: row.client_cpf ?? '',
@@ -467,6 +551,7 @@ export class SupabaseProposalStore implements ProposalStore {
       },
       additionalInfo: row.additional_info ?? '',
       formData: row.form_data ?? {},
+      comments: normalizeProposalComments(row.proposal_comments),
       documents: (row.proposal_documents ?? []).map((document) => ({
         id: document.id,
         filename: document.filename,
@@ -492,16 +577,16 @@ export class SupabaseProposalStore implements ProposalStore {
     };
   }
 
-  private async resolveAccess(userId: string): Promise<{ isAdmin: boolean; role: UserRole }> {
+  private async resolveAccess(userId: string): Promise<{ isAdmin: boolean; role: UserRole; fullName: string }> {
     const { data, error } = await this.client
       .from('profiles')
-      .select('role')
+      .select('role, full_name')
       .eq('id', userId)
       .single();
 
     if (error) {
       if (error.code === 'PGRST116') {
-        return { isAdmin: false, role: 'broker' };
+        return { isAdmin: false, role: 'broker', fullName: '' };
       }
 
       throw new Error(`Supabase profile role get failed: ${error.message}`);
@@ -511,7 +596,34 @@ export class SupabaseProposalStore implements ProposalStore {
     return {
       isAdmin: role === 'admin',
       role,
+      fullName: data.full_name ?? '',
     };
+  }
+
+  private async getProposalForUpdate(
+    proposalId: string,
+    brokerUserId?: string,
+  ): Promise<Pick<ProposalRow, 'status' | 'proposal_comments'> | null> {
+    let query = this.client
+      .from('proposals')
+      .select('status, proposal_comments')
+      .eq('id', proposalId);
+
+    if (brokerUserId) {
+      query = query.eq('broker_user_id', brokerUserId);
+    }
+
+    const { data, error } = await query.single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return null;
+      }
+
+      throw new Error(`Supabase proposal update context failed: ${error.message}`);
+    }
+
+    return data as Pick<ProposalRow, 'status' | 'proposal_comments'>;
   }
 }
 
@@ -535,6 +647,69 @@ function isProposalStatus(status: string | null | undefined): status is Proposal
 const proposalStatusLabels = new Map(
   PROPOSAL_STATUS_OPTIONS.map((status) => [status.value, status.label]),
 );
+
+function normalizeProposalComments(value: unknown): ProposalComment[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') {
+      return [];
+    }
+
+    const record = item as Record<string, unknown>;
+
+    if (
+      typeof record.id !== 'string' ||
+      typeof record.authorName !== 'string' ||
+      (record.authorRole !== 'admin' && record.authorRole !== 'broker') ||
+      typeof record.createdAt !== 'string' ||
+      typeof record.message !== 'string'
+    ) {
+      return [];
+    }
+
+    const type = normalizeCommentType(record.type);
+
+    return [{
+      id: record.id,
+      authorName: record.authorName,
+      authorRole: record.authorRole,
+      createdAt: record.createdAt,
+      message: record.message,
+      type,
+    }];
+  });
+}
+
+function normalizeCommentType(value: unknown): ProposalCommentType {
+  if (value === 'pending_reason' || value === 'resubmission') {
+    return value;
+  }
+
+  return 'comment';
+}
+
+function buildProposalComment(input: {
+  authorName: string;
+  authorRole: UserRole;
+  message: string;
+  type: ProposalCommentType;
+}): ProposalComment {
+  return {
+    id: randomUUID(),
+    authorName: input.authorName,
+    authorRole: input.authorRole,
+    createdAt: new Date().toISOString(),
+    message: input.message,
+    type: input.type,
+  };
+}
+
+function getAccessDisplayName(access: { role: UserRole; fullName: string }): string {
+  return access.fullName || (access.role === 'admin' ? 'Administrador' : 'Corretor');
+}
 
 function escapeLike(value: string): string {
   return value.replace(/[,%]/g, '');

@@ -426,6 +426,8 @@ export class FormSubmissionHttpServer {
         propertyCity: readOptionalString(payload, 'propertyCity', 'municipioImovel'),
         propertyState: readOptionalString(payload, 'propertyState', 'ufImovel'),
         additionalInfo: readOptionalString(payload, 'additionalInfo', 'informacoesAdicionais'),
+        pendingReason: readOptionalString(payload, 'pendingReason', 'motivoPendencia'),
+        commentMessage: readOptionalString(payload, 'commentMessage', 'comentario'),
         formData: readOptionalObject(payload, 'formData', 'data'),
         status,
       });

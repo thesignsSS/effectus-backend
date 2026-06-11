@@ -7,6 +7,17 @@ export interface ProposalDocumentInput {
   uploadedAt: string;
 }
 
+export type ProposalCommentType = 'comment' | 'pending_reason' | 'resubmission';
+
+export interface ProposalComment {
+  id: string;
+  authorName: string;
+  authorRole: 'admin' | 'broker';
+  createdAt: string;
+  message: string;
+  type: ProposalCommentType;
+}
+
 export type ProposalStatus =
   | 'em_analise'
   | 'pendente'
@@ -85,6 +96,8 @@ export interface UpdateProposalInput {
   additionalInfo?: string;
   formData?: Record<string, unknown>;
   status?: ProposalStatus;
+  pendingReason?: string;
+  commentMessage?: string;
 }
 
 export interface ProposalDocumentContext {
@@ -125,6 +138,7 @@ export interface ProposalDetail {
   brokerName: string;
   brokerPhone: string;
   createdAt: string;
+  pendingReason: string;
   client: {
     name: string;
     cpf: string;
@@ -138,6 +152,7 @@ export interface ProposalDetail {
   };
   additionalInfo: string;
   formData: Record<string, unknown>;
+  comments: ProposalComment[];
   documents: ProposalDocument[];
 }
 
