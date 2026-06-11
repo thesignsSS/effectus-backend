@@ -156,8 +156,8 @@ as mesmas chaves do modelo cadastral.
 - Baileys para WhatsApp
 - Tesseract para OCR local
 - OpenRouter para IA
-- Microsoft Graph API para OneDrive
-- Supabase Storage opcional
+- Supabase Storage
+- Microsoft Graph API para OneDrive, fluxo pausado temporariamente
 - Arquitetura em camadas com entrada MVC
 
 ## Como rodar em desenvolvimento
@@ -170,15 +170,19 @@ npm install
 
 ### 2. Crie o arquivo `.env`
 
-Crie um arquivo `.env` na raiz do projeto. Para desenvolvimento local, use o
-storage em modo mock. Assim o bot roda sem precisar autenticar no OneDrive real.
+Crie um arquivo `.env` na raiz do projeto. O fluxo principal salva documentos e
+relatórios no Supabase Storage.
 
 ```env
-ONEDRIVE_PROVIDER=mock
-STORAGE_PROVIDER=mock
-ONEDRIVE_FOLDER=/docs
+STORAGE_PROVIDER=supabase
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+SUPABASE_BUCKET=docs-bot
+SUPABASE_FOLDER=whatsapp
+LOCAL_DOCUMENTS_MIRROR_ENABLED=false
 WHATSAPP_ALLOWED_CHAT_NAME=docs_bot
 QR_CODE_WEB_PORT=3334
+FORM_SUBMISSION_HTTP_PORT=3335
 OCR_PROVIDER=disabled
 ```
 
@@ -188,8 +192,11 @@ Campos importantes:
 - `WHATSAPP_ALLOWED_CHAT_ID`: opcional; se preenchido, restringe o bot a um chat
   específico do WhatsApp.
 - `QR_CODE_WEB_PORT`: porta do painel web que mostra o QR Code e documentos.
-- `STORAGE_PROVIDER=mock`: salva usando o cliente local/mock.
-- `ONEDRIVE_FOLDER=/docs`: pasta usada pelo mock ou pelo OneDrive real.
+- `FORM_SUBMISSION_HTTP_PORT`: porta da API de recebimento de formulários.
+- `STORAGE_PROVIDER=supabase`: salva documentos e relatórios no bucket Supabase.
+- `SUPABASE_BUCKET`: bucket onde os arquivos serão enviados.
+- `SUPABASE_FOLDER`: pasta base dentro do bucket.
+- `LOCAL_DOCUMENTS_MIRROR_ENABLED=false`: desliga a cópia local em pasta do PC.
 - `OCR_PROVIDER=disabled`: deixa OCR desligado no primeiro teste.
 
 ### 3. Rode o bot em modo dev
@@ -243,15 +250,15 @@ Durante a execução, acompanhe:
 - logs no terminal;
 - painel web em `http://localhost:3334`;
 - arquivos temporários em `tmp/uploads`;
-- documentos/relatórios enviados ao storage configurado.
+- documentos/relatórios enviados ao bucket Supabase configurado.
 
-Em modo mock, o storage simula o envio usando a configuração local. Para enviar
-para OneDrive real, use a configuração da próxima seção.
+O fluxo de OneDrive/pasta local está pausado temporariamente.
 
-## Configuração do OneDrive real
+## Configuração do OneDrive real, pausada
 
-Para usar OneDrive real, configure `ONEDRIVE_PROVIDER=graph` ou
-`STORAGE_PROVIDER=onedrive` e informe as credenciais Microsoft:
+O trecho de OneDrive foi deixado comentado no código por enquanto. Quando esse
+fluxo voltar, configure `ONEDRIVE_PROVIDER=graph` ou `STORAGE_PROVIDER=onedrive`
+e informe as credenciais Microsoft:
 
 ```env
 ONEDRIVE_PROVIDER=graph
@@ -308,7 +315,7 @@ cadastral.
 
 ## Configuração do Supabase Storage
 
-Como alternativa ao OneDrive, configure o Supabase Storage:
+Configure o Supabase Storage:
 
 ```env
 STORAGE_PROVIDER=supabase
@@ -316,6 +323,7 @@ SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 SUPABASE_BUCKET=docs-bot
 SUPABASE_FOLDER=whatsapp
+LOCAL_DOCUMENTS_MIRROR_ENABLED=false
 ```
 
 ## Como rodar compilado

@@ -1,6 +1,4 @@
 import dotenv from 'dotenv';
-import { homedir } from 'node:os';
-import path from 'node:path';
 
 dotenv.config();
 
@@ -41,8 +39,7 @@ export interface Env {
 }
 
 const oneDriveProvider = (process.env.ONEDRIVE_PROVIDER ?? 'mock') as OneDriveProviderMode;
-const storageProvider = (process.env.STORAGE_PROVIDER ??
-  (oneDriveProvider === 'graph' ? 'onedrive' : 'mock')) as StorageProviderMode;
+const storageProvider = (process.env.STORAGE_PROVIDER ?? 'supabase') as StorageProviderMode;
 
 export const env: Env = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
@@ -71,11 +68,9 @@ export const env: Env = {
   supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
   supabaseBucket: process.env.SUPABASE_BUCKET ?? 'docs-bot',
   supabaseFolder: process.env.SUPABASE_FOLDER ?? 'whatsapp',
-  localDocumentsRoot:
-    process.env.LOCAL_DOCUMENTS_ROOT ??
-    path.join(homedir(), 'Library', 'CloudStorage', 'OneDrive-Pessoal'),
+  localDocumentsRoot: process.env.LOCAL_DOCUMENTS_ROOT ?? '/app/docs',
   localDocumentsMirrorEnabled:
-    (process.env.LOCAL_DOCUMENTS_MIRROR_ENABLED ?? 'true').toLowerCase() !== 'false',
+    (process.env.LOCAL_DOCUMENTS_MIRROR_ENABLED ?? 'false').toLowerCase() !== 'false',
   ocrProvider: (process.env.OCR_PROVIDER ?? 'disabled') as OcrProviderMode,
   ocrLanguage: process.env.OCR_LANGUAGE ?? 'por',
   openRouterApiKey: process.env.OPENROUTER_API_KEY,

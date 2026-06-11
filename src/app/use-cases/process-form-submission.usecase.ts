@@ -1,9 +1,15 @@
+import { BrokerClientStore } from '../domain/interfaces/broker-client-store.interface.js';
+import {
+  ProposalDocumentInput,
+  ProposalStore,
+} from '../domain/interfaces/proposal-store.interface.js';
 import { FileExtension } from '../domain/constants/file.constants.js';
 import { Logger } from '../domain/interfaces/logger.interface.js';
 import { OneDriveService } from '../services/onedrive.service.js';
 import { WhatsAppService } from '../services/whatsapp.service.js';
 import {
   generateDocumentFileName,
+  getContentTypeByFilename,
   getFileExtension,
   isValidExtension,
 } from '../utils/file-validator.js';
@@ -14,6 +20,7 @@ export interface FormSubmissionDocument {
 }
 
 export interface FormSubmissionInput {
+  brokerUserId?: string;
   brokerName: string;
   clientName: string;
   formData: Record<string, unknown>;
@@ -21,12 +28,17 @@ export interface FormSubmissionInput {
 }
 
 export interface FormSubmissionResult {
+  proposalCode?: string;
+  proposalId?: string;
+  savedClient: boolean;
   uploadedLocations: string[];
 }
 
 export class ProcessFormSubmissionUseCase {
   constructor(
     private readonly storageService: OneDriveService,
+    private readonly brokerClientStore: BrokerClientStore,
+    private readonly proposalStore: ProposalStore,
     private readonly whatsAppService: WhatsAppService,
     private readonly logger: Logger,
   ) {}
@@ -38,6 +50,7 @@ export class ProcessFormSubmissionUseCase {
       clientName: input.clientName,
     };
     const uploadedLocations: string[] = [];
+    const proposalDocuments: ProposalDocumentInput[] = [];
 
     const report = this.buildFormReport(input, createdAt);
     const reportFilename = generateDocumentFileName({
@@ -48,13 +61,21 @@ export class ProcessFormSubmissionUseCase {
       brokerName: input.brokerName,
     });
 
-    uploadedLocations.push(
-      await this.storageService.upload(
-        Buffer.from(report, 'utf-8'),
-        reportFilename,
-        uploadOptions,
-      ),
+    const reportBuffer = Buffer.from(report, 'utf-8');
+    const reportLocation = await this.storageService.upload(
+      reportBuffer,
+      reportFilename,
+      uploadOptions,
     );
+    uploadedLocations.push(reportLocation);
+    proposalDocuments.push({
+      filename: reportFilename,
+      originalFilename: `dados_formulario_${input.clientName}.${FileExtension.TXT}`,
+      storageLocation: reportLocation,
+      contentType: getContentTypeByFilename(reportFilename),
+      sizeBytes: reportBuffer.length,
+      uploadedAt: createdAt.toISOString(),
+    });
 
     for (const [index, document] of input.documents.entries()) {
       const extension = getFileExtension(document.filename);
@@ -78,14 +99,24 @@ export class ProcessFormSubmissionUseCase {
         brokerName: input.brokerName,
       });
 
-      uploadedLocations.push(
-        await this.storageService.upload(buffer, filename, uploadOptions),
-      );
+      const location = await this.storageService.upload(buffer, filename, uploadOptions);
+      uploadedLocations.push(location);
+      proposalDocuments.push({
+        filename,
+        originalFilename: document.filename,
+        storageLocation: location,
+        contentType: getContentTypeByFilename(filename),
+        sizeBytes: buffer.length,
+        uploadedAt: createdAt.toISOString(),
+      });
     }
+
+    const savedClient = await this.saveBrokerClientIfPossible(input);
+    const savedProposal = await this.saveProposalIfPossible(input, proposalDocuments);
 
     await this.whatsAppService.sendTextToConfiguredChat(
       [
-        'Arquivos recebidos com sucesso no OneDrive.',
+        'Arquivos recebidos com sucesso no storage.',
         `Corretor: ${input.brokerName}`,
         `Cliente: ${input.clientName}`,
         `Arquivos enviados: ${uploadedLocations.length}`,
@@ -96,9 +127,17 @@ export class ProcessFormSubmissionUseCase {
       brokerName: input.brokerName,
       clientName: input.clientName,
       filesUploaded: uploadedLocations.length,
+      savedClient,
+      proposalId: savedProposal?.id,
+      proposalCode: savedProposal?.proposalCode,
     });
 
-    return { uploadedLocations };
+    return {
+      proposalCode: savedProposal?.proposalCode,
+      proposalId: savedProposal?.id,
+      savedClient,
+      uploadedLocations,
+    };
   }
 
   private buildFormReport(input: FormSubmissionInput, createdAt: Date): string {
@@ -115,6 +154,108 @@ export class ProcessFormSubmissionUseCase {
     ];
 
     return lines.join('\n');
+  }
+
+  private async saveBrokerClientIfPossible(
+    input: FormSubmissionInput,
+  ): Promise<boolean> {
+    if (!input.brokerUserId) {
+      this.logger.warn('Cadastro do cliente nao foi persistido: brokerUserId ausente', {
+        brokerName: input.brokerName,
+        clientName: input.clientName,
+      });
+      return false;
+    }
+
+    await this.brokerClientStore.save({
+      brokerUserId: input.brokerUserId,
+      brokerName: input.brokerName,
+      clientName: input.clientName,
+      clientCpf: findFirstString(input.formData, [
+        'CPF do Cliente',
+        'cpf',
+        'cpfCliente',
+      ]),
+      clientEmail: findFirstString(input.formData, [
+        'E-mail do Cliente',
+        'E-mail',
+        'email',
+        'emailCliente',
+      ]),
+      clientPhone: findFirstString(input.formData, [
+        'Telefone do Cliente',
+        'Telefone Celular Número',
+        'telefone',
+        'telefoneCliente',
+      ]),
+      formData: input.formData,
+    });
+
+    return true;
+  }
+
+  private async saveProposalIfPossible(
+    input: FormSubmissionInput,
+    documents: Array<{
+      filename: string;
+      originalFilename: string;
+      storageLocation: string;
+      contentType: string;
+      sizeBytes: number;
+      uploadedAt: string;
+    }>,
+  ): Promise<{ id: string; proposalCode: string } | undefined> {
+    if (!input.brokerUserId) {
+      this.logger.warn('Proposta nao foi persistida: brokerUserId ausente', {
+        brokerName: input.brokerName,
+        clientName: input.clientName,
+      });
+      return undefined;
+    }
+
+    return this.proposalStore.create({
+      brokerUserId: input.brokerUserId,
+      brokerName: input.brokerName,
+      clientName: input.clientName,
+      clientCpf: findFirstString(input.formData, [
+        'CPF do Cliente',
+        'cpf',
+        'cpfCliente',
+      ]),
+      clientEmail: findFirstString(input.formData, [
+        'E-mail do Cliente',
+        'E-mail',
+        'email',
+        'emailCliente',
+      ]),
+      clientPhone: findFirstString(input.formData, [
+        'Telefone do Cliente',
+        'Telefone Celular Número',
+        'telefone',
+        'telefoneCliente',
+      ]),
+      propertyType: findFirstString(input.formData, [
+        'Tipo do Imóvel',
+        'Tipo de Imóvel',
+        'propertyType',
+      ]),
+      propertyCity: findFirstString(input.formData, [
+        'Município do Imóvel',
+        'Município',
+        'propertyCity',
+      ]),
+      propertyState: findFirstString(input.formData, [
+        'UF do Imóvel',
+        'UF do Endereço',
+        'propertyState',
+      ]),
+      additionalInfo: findFirstString(input.formData, [
+        'Informações Adicionais',
+        'additionalInfo',
+      ]),
+      formData: input.formData,
+      documents,
+    });
   }
 }
 
@@ -136,4 +277,19 @@ function formatValue(value: unknown): string {
   }
 
   return JSON.stringify(value);
+}
+
+function findFirstString(
+  formData: Record<string, unknown>,
+  keys: string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = formData[key];
+
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return undefined;
 }

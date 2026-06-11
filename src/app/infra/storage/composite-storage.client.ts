@@ -35,4 +35,28 @@ export class CompositeStorageClient implements StorageProvider {
 
     return this.primary.listDocuments();
   }
+
+  async delete(location: string): Promise<void> {
+    if (!this.primary.delete) {
+      throw new Error('Primary storage provider does not support delete');
+    }
+
+    await this.primary.delete(location);
+  }
+
+  async download(location: string): Promise<Buffer> {
+    if (!this.primary.download) {
+      throw new Error('Primary storage provider does not support download');
+    }
+
+    return this.primary.download(location);
+  }
+
+  async createSignedUrl(location: string, expiresInSeconds: number): Promise<string> {
+    if (!this.primary.createSignedUrl) {
+      throw new Error('Primary storage provider does not support signed URLs');
+    }
+
+    return this.primary.createSignedUrl(location, expiresInSeconds);
+  }
 }

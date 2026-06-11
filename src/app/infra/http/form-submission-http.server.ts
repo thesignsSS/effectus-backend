@@ -1,11 +1,25 @@
 import http, { IncomingMessage, ServerResponse } from 'node:http';
+import { promises as fs } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { timingSafeEqual } from 'node:crypto';
+import { URL } from 'node:url';
 import { Logger } from '../../domain/interfaces/logger.interface.js';
+import { ProfileStore } from '../../domain/interfaces/profile-store.interface.js';
+import { ProposalStore } from '../../domain/interfaces/proposal-store.interface.js';
+import { OneDriveService } from '../../services/onedrive.service.js';
 import {
   FormSubmissionDocument,
   FormSubmissionInput,
   ProcessFormSubmissionUseCase,
 } from '../../use-cases/process-form-submission.usecase.js';
+import {
+  generateDocumentFileName,
+  getContentTypeByFilename,
+  getFileExtension,
+  isValidExtension,
+} from '../../utils/file-validator.js';
 
 export interface FormSubmissionHttpServerConfig {
   port: number;
@@ -22,6 +36,9 @@ export class FormSubmissionHttpServer {
   constructor(
     private readonly config: FormSubmissionHttpServerConfig,
     private readonly processFormSubmission: ProcessFormSubmissionUseCase,
+    private readonly profileStore: ProfileStore,
+    private readonly proposalStore: ProposalStore,
+    private readonly storageService: OneDriveService,
     private readonly logger: Logger,
   ) {}
 
@@ -54,18 +71,86 @@ export class FormSubmissionHttpServer {
       return;
     }
 
-    if (request.method === 'GET' && request.url === '/api/elias') {
-      this.sendJson(response, 200, { message: 'Elias Lindo' });
-      return;
-    }
+    const requestUrl = new URL(request.url ?? '/', 'http://localhost');
 
-    if (request.method !== 'POST' || request.url !== '/api/form-submissions') {
-      this.sendJson(response, 404, { error: 'Endpoint não encontrado' });
+    if (request.method === 'GET' && requestUrl.pathname === '/api/elias') {
+      this.sendJson(response, 200, { message: 'Elias Lindo' });
       return;
     }
 
     if (!this.isAuthorized(request)) {
       this.sendJson(response, 401, { ok: false, error: 'Não autorizado' });
+      return;
+    }
+
+    if (request.method === 'GET' && requestUrl.pathname === '/api/me') {
+      await this.handleGetCurrentProfile(requestUrl, response);
+      return;
+    }
+
+    if (request.method === 'GET' && requestUrl.pathname === '/api/proposals') {
+      await this.handleListProposals(requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'GET' &&
+      requestUrl.pathname.match(/^\/api\/proposals\/[^/]+\/download$/)
+    ) {
+      await this.handleDownloadProposal(requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'GET' &&
+      requestUrl.pathname.match(/^\/api\/proposals\/[^/]+\/documents\/[^/]+\/view$/)
+    ) {
+      await this.handleViewProposalDocument(requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'POST' &&
+      requestUrl.pathname.match(/^\/api\/proposals\/[^/]+\/documents$/)
+    ) {
+      await this.handleAddProposalDocuments(request, requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'PATCH' &&
+      requestUrl.pathname.match(/^\/api\/proposals\/[^/]+\/documents\/[^/]+$/)
+    ) {
+      await this.handleRenameProposalDocument(request, requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'DELETE' &&
+      requestUrl.pathname.match(/^\/api\/proposals\/[^/]+\/documents\/[^/]+$/)
+    ) {
+      await this.handleDeleteProposalDocument(requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'PATCH' &&
+      requestUrl.pathname.match(/^\/api\/proposals\/[^/]+$/)
+    ) {
+      await this.handleUpdateProposal(request, requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'GET' &&
+      requestUrl.pathname.match(/^\/api\/proposals\/[^/]+$/)
+    ) {
+      await this.handleGetProposal(requestUrl, response);
+      return;
+    }
+
+    if (request.method !== 'POST' || requestUrl.pathname !== '/api/form-submissions') {
+      this.sendJson(response, 404, { error: 'Endpoint não encontrado' });
       return;
     }
 
@@ -76,6 +161,9 @@ export class FormSubmissionHttpServer {
 
       this.sendJson(response, 201, {
         ok: true,
+        proposalId: result.proposalId ?? null,
+        proposalCode: result.proposalCode ?? null,
+        savedClient: result.savedClient,
         uploadedFiles: result.uploadedLocations.length,
         locations: result.uploadedLocations,
       });
@@ -90,6 +178,49 @@ export class FormSubmissionHttpServer {
         ok: false,
         error: message,
       });
+    }
+  }
+
+  private async handleGetCurrentProfile(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const userId =
+      requestUrl.searchParams.get('userId')?.trim() ??
+      requestUrl.searchParams.get('brokerUserId')?.trim();
+
+    if (!userId) {
+      this.sendJson(response, 400, {
+        ok: false,
+        error: 'Campo obrigatório ausente: userId',
+      });
+      return;
+    }
+
+    try {
+      const profile = await this.profileStore.getById(userId);
+
+      if (!profile) {
+        this.sendJson(response, 404, {
+          ok: false,
+          error: 'Perfil não encontrado',
+        });
+        return;
+      }
+
+      this.sendJson(response, 200, {
+        id: profile.id,
+        fullName: profile.fullName,
+        role: profile.role,
+        isAdmin: profile.isAdmin,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao buscar perfil atual', {
+        error: message,
+        userId,
+      });
+      this.sendJson(response, 500, { ok: false, error: message });
     }
   }
 
@@ -131,12 +262,18 @@ export class FormSubmissionHttpServer {
   }
 
   private toFormSubmissionInput(payload: JsonObject): FormSubmissionInput {
+    const brokerUserId = readOptionalString(
+      payload,
+      'brokerUserId',
+      'corretorUserId',
+    );
     const brokerName = readRequiredString(payload, 'brokerName', 'corretor');
     const clientName = readRequiredString(payload, 'clientName', 'cliente');
     const documents = readDocuments(payload.documents);
     const formData = readFormData(payload);
 
     return {
+      brokerUserId,
       brokerName,
       clientName,
       formData,
@@ -146,11 +283,384 @@ export class FormSubmissionHttpServer {
 
   private setCorsHeaders(response: ServerResponse): void {
     response.setHeader('Access-Control-Allow-Origin', '*');
-    response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
     response.setHeader(
       'Access-Control-Allow-Headers',
       'Content-Type, Authorization, x-api-key',
     );
+  }
+
+  private async handleListProposals(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const brokerUserId = requestUrl.searchParams.get('brokerUserId')?.trim();
+
+    if (!brokerUserId) {
+      this.sendJson(response, 400, {
+        ok: false,
+        error: 'Campo obrigatório ausente: brokerUserId',
+      });
+      return;
+    }
+
+    const page = Math.max(1, Number(requestUrl.searchParams.get('page') ?? 1));
+    const pageSize = Math.min(
+      100,
+      Math.max(1, Number(requestUrl.searchParams.get('pageSize') ?? 10)),
+    );
+    const ownerBrokerUserId =
+      requestUrl.searchParams.get('ownerBrokerUserId')?.trim() ?? undefined;
+    const search = requestUrl.searchParams.get('search')?.trim() ?? undefined;
+
+    try {
+      const result = await this.proposalStore.listByBroker({
+        brokerUserId,
+        ownerBrokerUserId,
+        search,
+        page,
+        pageSize,
+      });
+
+      this.sendJson(response, 200, {
+        items: result.items,
+        total: result.total,
+        page: result.page,
+        pageSize: result.pageSize,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao listar propostas', { error: message, brokerUserId });
+      this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handleGetProposal(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const brokerUserId = requestUrl.searchParams.get('brokerUserId')?.trim();
+
+    if (!brokerUserId) {
+      this.sendJson(response, 400, {
+        ok: false,
+        error: 'Campo obrigatório ausente: brokerUserId',
+      });
+      return;
+    }
+
+    const proposalId = requestUrl.pathname.replace('/api/proposals/', '').trim();
+    if (!proposalId) {
+      this.sendJson(response, 400, {
+        ok: false,
+        error: 'Campo obrigatório ausente: proposalId',
+      });
+      return;
+    }
+
+    try {
+      const proposal = await this.proposalStore.getById({
+        brokerUserId,
+        proposalId,
+      });
+
+      if (!proposal) {
+        this.sendJson(response, 404, {
+          ok: false,
+          error: 'Proposta não encontrada',
+        });
+        return;
+      }
+
+      this.sendJson(response, 200, proposal as unknown as JsonObject);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao buscar proposta', {
+        error: message,
+        brokerUserId,
+        proposalId,
+      });
+      this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handleUpdateProposal(
+    request: IncomingMessage,
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const payload = await this.readJsonBody(request);
+    const brokerUserId = readRequiredString(payload, 'brokerUserId', 'corretorUserId');
+    const proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
+
+    try {
+      await this.proposalStore.update({
+        proposalId,
+        brokerUserId,
+        clientName: readOptionalString(payload, 'clientName', 'cliente'),
+        clientCpf: readOptionalString(payload, 'clientCpf', 'cpfCliente'),
+        clientEmail: readOptionalString(payload, 'clientEmail', 'emailCliente'),
+        clientPhone: readOptionalString(payload, 'clientPhone', 'telefoneCliente'),
+        propertyType: readOptionalString(payload, 'propertyType', 'tipoImovel'),
+        propertyCity: readOptionalString(payload, 'propertyCity', 'municipioImovel'),
+        propertyState: readOptionalString(payload, 'propertyState', 'ufImovel'),
+        additionalInfo: readOptionalString(payload, 'additionalInfo', 'informacoesAdicionais'),
+        formData: readOptionalObject(payload, 'formData', 'data'),
+      });
+
+      this.sendJson(response, 200, { ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao atualizar proposta', { error: message, proposalId });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
+    }
+  }
+
+  private async handleAddProposalDocuments(
+    request: IncomingMessage,
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const payload = await this.readJsonBody(request);
+    const brokerUserId = readRequiredString(payload, 'brokerUserId', 'corretorUserId');
+    const proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
+    const documents = readDocuments(payload.documents);
+
+    try {
+      const proposal = await this.proposalStore.getProposalContext({
+        brokerUserId,
+        proposalId,
+      });
+
+      if (!proposal) {
+        this.sendJson(response, 404, { ok: false, error: 'Proposta não encontrada' });
+        return;
+      }
+
+      const createdAt = new Date();
+      const uploadedDocuments = [];
+      const locations: string[] = [];
+
+      for (const [index, document] of documents.entries()) {
+        const extension = getFileExtension(document.filename);
+        if (!isValidExtension(extension)) {
+          throw new Error(`Extensão inválida no documento: ${document.filename}`);
+        }
+
+        const buffer = Buffer.from(document.contentBase64, 'base64');
+        if (!buffer.length || buffer.toString('base64') !== normalizeBase64(document.contentBase64)) {
+          throw new Error(`Base64 inválido no documento: ${document.filename}`);
+        }
+
+        const filename = generateDocumentFileName({
+          createdAt,
+          sender: 'endpoint',
+          originalName: document.filename,
+          messageId: `${proposalId}-${index + 1}`,
+          clientName: proposal.clientName,
+          brokerName: proposal.brokerName,
+        });
+        const location = await this.storageService.upload(buffer, filename, {
+          brokerName: proposal.brokerName,
+          clientName: proposal.clientName,
+        });
+
+        locations.push(location);
+        uploadedDocuments.push({
+          filename,
+          originalFilename: document.filename,
+          storageLocation: location,
+          contentType: getContentTypeByFilename(filename),
+          sizeBytes: buffer.length,
+          uploadedAt: createdAt.toISOString(),
+        });
+      }
+
+      await this.proposalStore.addDocuments({
+        brokerUserId,
+        proposalId,
+        documents: uploadedDocuments,
+      });
+
+      this.sendJson(response, 201, {
+        ok: true,
+        uploadedFiles: uploadedDocuments.length,
+        locations,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao adicionar documentos na proposta', {
+        error: message,
+        proposalId,
+      });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
+    }
+  }
+
+  private async handleRenameProposalDocument(
+    request: IncomingMessage,
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const payload = await this.readJsonBody(request);
+    const brokerUserId = readRequiredString(payload, 'brokerUserId', 'corretorUserId');
+    const proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
+    const documentId = getRequiredPathSegment(requestUrl.pathname, 4, 'documentId');
+    const displayName = readRequiredString(payload, 'displayName', 'filename');
+
+    try {
+      await this.proposalStore.renameDocument({
+        brokerUserId,
+        proposalId,
+        documentId,
+        displayName,
+      });
+
+      this.sendJson(response, 200, { ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao renomear documento da proposta', {
+        error: message,
+        proposalId,
+        documentId,
+      });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
+    }
+  }
+
+  private async handleDeleteProposalDocument(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const brokerUserId = requestUrl.searchParams.get('brokerUserId')?.trim();
+    if (!brokerUserId) {
+      this.sendJson(response, 400, { ok: false, error: 'Campo obrigatório ausente: brokerUserId' });
+      return;
+    }
+
+    const proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
+    const documentId = getRequiredPathSegment(requestUrl.pathname, 4, 'documentId');
+
+    try {
+      const document = await this.proposalStore.deleteDocument({
+        brokerUserId,
+        proposalId,
+        documentId,
+      });
+
+      if (!document) {
+        this.sendJson(response, 404, { ok: false, error: 'Documento não encontrado' });
+        return;
+      }
+
+      await this.storageService.delete(document.storageLocation);
+
+      this.sendJson(response, 200, { ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao excluir documento da proposta', {
+        error: message,
+        proposalId,
+        documentId,
+      });
+      this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handleViewProposalDocument(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const brokerUserId = requestUrl.searchParams.get('brokerUserId')?.trim();
+    if (!brokerUserId) {
+      this.sendJson(response, 400, { ok: false, error: 'Campo obrigatório ausente: brokerUserId' });
+      return;
+    }
+
+    const proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
+    const documentId = getRequiredPathSegment(requestUrl.pathname, 4, 'documentId');
+
+    try {
+      const document = await this.proposalStore.getDocument({
+        brokerUserId,
+        proposalId,
+        documentId,
+      });
+
+      if (!document) {
+        this.sendJson(response, 404, { ok: false, error: 'Documento não encontrado' });
+        return;
+      }
+
+      const url = await this.storageService.createSignedUrl(document.storageLocation, 3600);
+      this.sendJson(response, 200, {
+        ok: true,
+        url,
+        filename: document.originalFilename,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao gerar visualização do documento', {
+        error: message,
+        proposalId,
+        documentId,
+      });
+      this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handleDownloadProposal(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const brokerUserId = requestUrl.searchParams.get('brokerUserId')?.trim();
+    if (!brokerUserId) {
+      this.sendJson(response, 400, { ok: false, error: 'Campo obrigatório ausente: brokerUserId' });
+      return;
+    }
+
+    const proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
+
+    try {
+      const proposal = await this.proposalStore.getById({
+        brokerUserId,
+        proposalId,
+      });
+
+      if (!proposal) {
+        this.sendJson(response, 404, { ok: false, error: 'Proposta não encontrada' });
+        return;
+      }
+
+      const tempRoot = await fs.mkdtemp(path.join(tmpdir(), `proposal-${proposalId}-`));
+      const filesDir = path.join(tempRoot, 'files');
+      const zipPath = path.join(tempRoot, `${proposal.proposalCode}.zip`);
+      await fs.mkdir(filesDir, { recursive: true });
+
+      for (const document of proposal.documents) {
+        const buffer = await this.storageService.download(document.storageLocation);
+        const outputPath = path.join(filesDir, sanitizeFileName(document.displayName));
+        await fs.writeFile(outputPath, buffer);
+      }
+
+      await runZip(filesDir, zipPath);
+      const zipBuffer = await fs.readFile(zipPath);
+
+      response.writeHead(200, {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': `attachment; filename="${proposal.proposalCode}.zip"`,
+      });
+      response.end(zipBuffer);
+
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao gerar ZIP da proposta', {
+        error: message,
+        proposalId,
+      });
+      this.sendJson(response, 500, { ok: false, error: message });
+    }
   }
 
   private isAuthorized(request: IncomingMessage): boolean {
@@ -177,7 +687,7 @@ export class FormSubmissionHttpServer {
   private sendJson(
     response: ServerResponse,
     statusCode: number,
-    payload: JsonObject,
+    payload: unknown,
   ): void {
     response.writeHead(statusCode, {
       'Content-Type': 'application/json; charset=utf-8',
@@ -211,6 +721,34 @@ function readRequiredString(
   }
 
   return value.trim();
+}
+
+function readOptionalString(
+  payload: JsonObject,
+  primaryKey: string,
+  fallbackKey: string,
+): string | undefined {
+  const value = payload[primaryKey] ?? payload[fallbackKey];
+
+  if (typeof value !== 'string' || !value.trim()) {
+    return undefined;
+  }
+
+  return value.trim();
+}
+
+function readOptionalObject(
+  payload: JsonObject,
+  primaryKey: string,
+  fallbackKey: string,
+): Record<string, unknown> | undefined {
+  const value = payload[primaryKey] ?? payload[fallbackKey];
+
+  if (!isJsonObject(value)) {
+    return undefined;
+  }
+
+  return value;
 }
 
 function readDocuments(value: JsonValue | undefined): FormSubmissionDocument[] {
@@ -277,4 +815,53 @@ function safeCompare(left: string, right: string): boolean {
     leftBuffer.length === rightBuffer.length &&
     timingSafeEqual(leftBuffer, rightBuffer)
   );
+}
+
+function getRequiredPathSegment(
+  pathname: string,
+  index: number,
+  fieldName: string,
+): string {
+  const parts = pathname.split('/').filter(Boolean);
+  const value = parts[index];
+
+  if (!value) {
+    throw new Error(`Campo obrigatório ausente: ${fieldName}`);
+  }
+
+  return value;
+}
+
+function sanitizeFileName(value: string): string {
+  return value
+    .replace(/[<>:"/\\|?*]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim() || 'arquivo';
+}
+
+function normalizeBase64(value: string): string {
+  return value.replace(/\s+/g, '');
+}
+
+function runZip(filesDir: string, zipPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('zip', ['-r', zipPath, '.'], {
+      cwd: filesDir,
+    });
+
+    let stderr = '';
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf-8');
+    });
+
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new Error(`ZIP command failed: ${stderr || code}`));
+    });
+  });
 }

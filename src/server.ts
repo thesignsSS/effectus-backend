@@ -3,14 +3,15 @@ import { fileURLToPath } from 'node:url';
 import { NoopAutomationClient } from './app/infra/automation/noop-automation.client.js';
 import { ConsoleLogger } from './app/infra/logger/logger.js';
 import { FormSubmissionHttpServer } from './app/infra/http/form-submission-http.server.js';
-import { MockOneDriveClient } from './app/infra/onedrive/mock-onedrive.client.js';
-import { OneDriveClient } from './app/infra/onedrive/onedrive.client.js';
 import { OpenRouterCustomerRegistrationClient } from './app/infra/llm/openrouter-customer-registration.client.js';
 import { CompositeQrCodePresenter } from './app/infra/qrcode/composite-qr-code.presenter.js';
 import { TerminalQrCodePresenter } from './app/infra/qrcode/terminal-qr-code.presenter.js';
 import { WebQrCodePresenter } from './app/infra/qrcode/web-qr-code.presenter.js';
 import { CompositeStorageClient } from './app/infra/storage/composite-storage.client.js';
 import { LocalFolderStorageClient } from './app/infra/storage/local-folder-storage.client.js';
+import { SupabaseBrokerClientStore } from './app/infra/supabase/supabase-broker-client.store.js';
+import { SupabaseProfileStore } from './app/infra/supabase/supabase-profile.store.js';
+import { SupabaseProposalStore } from './app/infra/supabase/supabase-proposal.store.js';
 import { SupabaseStorageClient } from './app/infra/supabase/supabase-storage.client.js';
 import { NoopOcrProvider } from './app/infra/ocr/noop-ocr.provider.js';
 import { TesseractOcrProvider } from './app/infra/ocr/tesseract-ocr.provider.js';
@@ -31,7 +32,13 @@ import { env } from './config/env.js';
 
 export function buildApp(): WhatsAppController {
   const logger = new ConsoleLogger();
-  const storageProvider = buildStorageProvider();
+  const storageProvider = buildStorageProvider(logger);
+  logger.info('Storage configurado', {
+    provider: env.storageProvider,
+    bucket: env.supabaseBucket,
+    folder: env.supabaseFolder,
+    localMirrorEnabled: env.localDocumentsMirrorEnabled,
+  });
   const webQrCodePresenter = new WebQrCodePresenter(
     {
       port: env.qrCodeWebPort,
@@ -73,8 +80,22 @@ export function buildApp(): WhatsAppController {
           logger,
         );
   const whatsAppService = new WhatsAppService(messagingProvider);
+  const brokerClientStore = new SupabaseBrokerClientStore({
+    url: env.supabaseUrl,
+    serviceRoleKey: env.supabaseServiceRoleKey,
+  });
+  const profileStore = new SupabaseProfileStore({
+    url: env.supabaseUrl,
+    serviceRoleKey: env.supabaseServiceRoleKey,
+  });
+  const proposalStore = new SupabaseProposalStore({
+    url: env.supabaseUrl,
+    serviceRoleKey: env.supabaseServiceRoleKey,
+  });
   const processFormSubmission = new ProcessFormSubmissionUseCase(
     oneDriveService,
+    brokerClientStore,
+    proposalStore,
     whatsAppService,
     logger,
   );
@@ -85,6 +106,9 @@ export function buildApp(): WhatsAppController {
       apiKey: env.formSubmissionApiKey,
     },
     processFormSubmission,
+    profileStore,
+    proposalStore,
+    oneDriveService,
     logger,
   ).start();
   const remittanceSessionService = new RemittanceSessionService();
@@ -153,37 +177,39 @@ export function buildApp(): WhatsAppController {
   return controller;
 }
 
-function buildStorageProvider() {
-  if (env.storageProvider === 'supabase') {
-    const supabaseStorage = new SupabaseStorageClient({
-      url: env.supabaseUrl,
-      serviceRoleKey: env.supabaseServiceRoleKey,
-      bucket: env.supabaseBucket,
-      folder: env.supabaseFolder,
-    });
+function buildStorageProvider(logger: ConsoleLogger) {
+  const supabaseStorage = new SupabaseStorageClient({
+    url: env.supabaseUrl,
+    serviceRoleKey: env.supabaseServiceRoleKey,
+    bucket: env.supabaseBucket,
+    folder: env.supabaseFolder,
+  }, logger);
 
-    if (!env.localDocumentsMirrorEnabled) {
-      return supabaseStorage;
-    }
-
-    return new CompositeStorageClient(supabaseStorage, [
-      new LocalFolderStorageClient({
-        rootDir: env.localDocumentsRoot,
-      }),
-    ]);
+  if (!env.localDocumentsMirrorEnabled) {
+    return supabaseStorage;
   }
 
-  if (env.storageProvider === 'onedrive' || env.oneDriveProvider === 'graph') {
-    return new OneDriveClient({
-      tenantId: env.oneDriveTenantId,
-      clientId: env.oneDriveClientId,
-      clientSecret: env.oneDriveClientSecret,
-      refreshToken: env.oneDriveRefreshToken,
-      folder: env.oneDriveFolder,
-    });
-  }
+  return new CompositeStorageClient(supabaseStorage, [
+    new LocalFolderStorageClient({
+      rootDir: env.localDocumentsRoot,
+    }),
+  ]);
 
-  return new MockOneDriveClient(env.oneDriveFolder);
+  /*
+   * Fluxo OneDrive pausado temporariamente.
+   *
+   * if (env.storageProvider === 'onedrive' || env.oneDriveProvider === 'graph') {
+   *   return new OneDriveClient({
+   *     tenantId: env.oneDriveTenantId,
+   *     clientId: env.oneDriveClientId,
+   *     clientSecret: env.oneDriveClientSecret,
+   *     refreshToken: env.oneDriveRefreshToken,
+   *     folder: env.oneDriveFolder,
+   *   });
+   * }
+   *
+   * return new MockOneDriveClient(env.oneDriveFolder);
+   */
 }
 
 function pathFromRoot(relativePath: string): string {
