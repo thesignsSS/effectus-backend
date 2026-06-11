@@ -114,14 +114,22 @@ export class ProcessFormSubmissionUseCase {
     const savedClient = await this.saveBrokerClientIfPossible(input);
     const savedProposal = await this.saveProposalIfPossible(input, proposalDocuments);
 
-    await this.whatsAppService.sendTextToConfiguredChat(
-      [
-        'Arquivos recebidos com sucesso no storage.',
-        `Corretor: ${input.brokerName}`,
-        `Cliente: ${input.clientName}`,
-        `Arquivos enviados: ${uploadedLocations.length}`,
-      ].join('\n'),
-    );
+    try {
+      await this.whatsAppService.sendTextToConfiguredChat(
+        [
+          'Arquivos recebidos com sucesso no storage.',
+          `Corretor: ${input.brokerName}`,
+          `Cliente: ${input.clientName}`,
+          `Arquivos enviados: ${uploadedLocations.length}`,
+        ].join('\n'),
+      );
+    } catch (error) {
+      this.logger.warn('Aviso de submissão não enviado pelo WhatsApp', {
+        brokerName: input.brokerName,
+        clientName: input.clientName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     this.logger.info('Submissão do endpoint processada com sucesso', {
       brokerName: input.brokerName,
