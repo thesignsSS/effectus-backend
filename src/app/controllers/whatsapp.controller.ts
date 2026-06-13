@@ -7,15 +7,11 @@ import { ProcessAdditionalInfoUseCase } from '../use-cases/process-additional-in
 import { GenerateCustomerRegistrationReportUseCase } from '../use-cases/generate-customer-registration-report.usecase.js';
 import { ProcessIncomingDocumentUseCase } from '../use-cases/process-incoming-document.usecase.js';
 
-const AVAILABLE_COMMANDS_MESSAGE = [
-  'Não entendi essa mensagem.',
+const WHATSAPP_CHANNEL_DEPRECATED_MESSAGE = [
+  'Este fluxo de envio por comandos no WhatsApp não está mais ativo.',
   '',
-  'Comandos disponíveis:',
-  'Novo cliente: Nome do cliente',
-  'Nome do corretor: Nome do corretor',
-  '',
-  'Quando terminar de enviar os documentos, envie:',
-  'Finalizado',
+  'Agora o envio e acompanhamento das propostas acontece pelo sistema da Effectus.',
+  'Se precisar, fale com o administrador para receber o acesso ou suporte.',
 ].join('\n');
 
 export class WhatsAppController {
@@ -55,7 +51,7 @@ export class WhatsAppController {
       });
       await this.whatsAppService.sendText(
         message.chatId,
-        'Nenhuma remessa ativa. Envie primeiro:\nNovo cliente: Nome do cliente\nNome do corretor: Nome do corretor',
+        WHATSAPP_CHANNEL_DEPRECATED_MESSAGE,
       );
       return;
     }
@@ -86,76 +82,27 @@ export class WhatsAppController {
 
   private async handleTextMessage(message: IncomingMessage): Promise<void> {
     const text = message.text?.trim() ?? '';
+    const activeRemittance = this.remittanceSessionService.getActive(message.chatId);
 
-    if (/^finalizado$/i.test(text)) {
-      const activeSession = this.remittanceSessionService.getActive(message.chatId);
-
-      if (!activeSession) {
-        await this.whatsAppService.sendText(
-          message.chatId,
-          'Nenhuma remessa ativa para finalizar.',
-        );
-        return;
-      }
-
-      await this.processingQueue.waitForIdle();
-
-      this.remittanceSessionService.finish(message.chatId);
-      const reportLocation =
-        await this.generateCustomerRegistrationReport.execute(activeSession);
-
+    if (!activeRemittance) {
+      this.logger.info('Mensagem recebida em canal legado do WhatsApp', {
+        messageId: message.id,
+        chatId: message.chatId,
+        hasText: Boolean(text),
+      });
       await this.whatsAppService.sendText(
         message.chatId,
-        [
-          'Remessa finalizada',
-          `Cliente: ${activeSession.clientName}`,
-          `Corretor: ${activeSession.brokerName}`,
-          `Documentos lidos: ${activeSession.documentReadings.length}`,
-          `Relatório cadastral: ${reportLocation}`,
-        ].join('\n'),
+        WHATSAPP_CHANNEL_DEPRECATED_MESSAGE,
       );
       return;
     }
 
-    const trigger = this.parseStartTrigger(text);
-
-    if (!trigger) {
-      const activeRemittance = this.remittanceSessionService.getActive(message.chatId);
-
-      if (!activeRemittance) {
-        this.logger.info('Mensagem não reconhecida sem remessa ativa', {
-          messageId: message.id,
-          chatId: message.chatId,
-        });
-        await this.whatsAppService.sendText(message.chatId, AVAILABLE_COMMANDS_MESSAGE);
-        return;
-      }
-
-      this.remittanceSessionService.addAdditionalMessage(message.chatId, text);
-      this.logger.info('Informação adicional registrada na remessa', {
-        messageId: message.id,
-        clientName: activeRemittance.clientName,
-        brokerName: activeRemittance.brokerName,
-      });
-      return;
-    }
-
-    const session = this.remittanceSessionService.start({
-      chatId: message.chatId,
-      clientName: trigger.clientName,
-      brokerName: trigger.brokerName,
+    this.remittanceSessionService.addAdditionalMessage(message.chatId, text);
+    this.logger.info('Informação adicional registrada na remessa', {
+      messageId: message.id,
+      clientName: activeRemittance.clientName,
+      brokerName: activeRemittance.brokerName,
     });
-
-    this.logger.info('Remessa iniciada', {
-      remittanceId: session.id,
-      clientName: session.clientName,
-      brokerName: session.brokerName,
-    });
-
-    await this.whatsAppService.sendText(
-      message.chatId,
-      `Chat Iniciado\nCliente: ${session.clientName}\nCorretor: ${session.brokerName}`,
-    );
   }
 
   async processQueuedTextMessage(message: IncomingMessage): Promise<void> {
@@ -169,31 +116,4 @@ export class WhatsAppController {
     }
   }
 
-  private parseStartTrigger(text: string):
-    | {
-        clientName: string;
-        brokerName: string;
-      }
-    | undefined {
-    const clientName = this.extractField(text, 'novo cliente');
-    const brokerName = this.extractField(text, 'nome do corretor');
-
-    if (!clientName || !brokerName) {
-      return undefined;
-    }
-
-    return {
-      clientName,
-      brokerName,
-    };
-  }
-
-  private extractField(text: string, label: string): string | undefined {
-    const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const field = text.match(
-      new RegExp(`${escapedLabel}\\s*:\\s*([^\\n;]+)`, 'i'),
-    )?.[1]?.trim();
-
-    return field || undefined;
-  }
 }

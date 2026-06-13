@@ -155,13 +155,15 @@ export class SupabaseProposalStore implements ProposalStore {
     const currentStatus = toStatusInfo(currentProposal.status).status;
     const nextStatus = input.status;
     const nextComments = normalizeProposalComments(currentProposal.proposal_comments);
+    const trimmedPendingReason = input.pendingReason?.trim() ?? '';
+    const trimmedCommentMessage = input.commentMessage?.trim() ?? '';
     let commentAdded = false;
     let resubmittedForAnalysis = false;
 
     if (nextStatus !== undefined) {
       if (access.isAdmin) {
         if (nextStatus === 'pendente') {
-          const pendingReason = input.pendingReason?.trim();
+          const pendingReason = trimmedPendingReason;
 
           if (!pendingReason) {
             throw new Error('Informe o motivo da pendência');
@@ -191,7 +193,7 @@ export class SupabaseProposalStore implements ProposalStore {
           buildProposalComment({
             authorName: getAccessDisplayName(access),
             authorRole: access.role,
-            message: input.commentMessage?.trim() || 'Proposta reenviada para análise.',
+            message: trimmedCommentMessage || 'Proposta reenviada para análise.',
             type: 'resubmission',
           }),
         );
@@ -201,7 +203,7 @@ export class SupabaseProposalStore implements ProposalStore {
       payload.status = nextStatus;
     }
 
-    if (input.commentMessage?.trim()) {
+    if (trimmedCommentMessage) {
       const shouldAppendStandaloneComment = !(
         !access.isAdmin &&
         currentStatus === 'pendente' &&
@@ -213,7 +215,7 @@ export class SupabaseProposalStore implements ProposalStore {
           buildProposalComment({
             authorName: getAccessDisplayName(access),
             authorRole: access.role,
-            message: input.commentMessage.trim(),
+            message: trimmedCommentMessage,
             type: 'comment',
           }),
         );
@@ -257,6 +259,9 @@ export class SupabaseProposalStore implements ProposalStore {
         proposalCode: currentProposal.proposalCode,
         brokerUserId: currentProposal.broker_user_id,
         brokerName: currentProposal.broker_name ?? 'Corretor',
+        brokerPhone: input.brokerPhone ?? currentProposal.broker_phone ?? '',
+        pendingReason: nextStatus === 'pendente' ? trimmedPendingReason : '',
+        adminComment: access.isAdmin ? trimmedCommentMessage : '',
         actorUserId: input.brokerUserId,
         actorRole: access.role,
         actorName: getAccessDisplayName(access),
@@ -693,13 +698,13 @@ export class SupabaseProposalStore implements ProposalStore {
   private async getProposalForUpdate(
     proposalId: string,
     brokerUserId?: string,
-  ): Promise<(Pick<ProposalRow, 'status' | 'proposal_comments' | 'broker_name'> & {
+  ): Promise<(Pick<ProposalRow, 'status' | 'proposal_comments' | 'broker_name' | 'broker_phone'> & {
     proposalCode: string;
     broker_user_id: string;
   }) | null> {
     let query = this.client
       .from('proposals')
-      .select('status, proposal_comments, broker_name, broker_user_id, proposal_number')
+      .select('status, proposal_comments, broker_name, broker_phone, broker_user_id, proposal_number')
       .eq('id', proposalId);
 
     if (brokerUserId) {
@@ -716,7 +721,7 @@ export class SupabaseProposalStore implements ProposalStore {
       throw new Error(`Supabase proposal update context failed: ${error.message}`);
     }
 
-    const row = data as Pick<ProposalRow, 'status' | 'proposal_comments' | 'broker_name'> & {
+    const row = data as Pick<ProposalRow, 'status' | 'proposal_comments' | 'broker_name' | 'broker_phone'> & {
       broker_user_id: string;
       proposal_number: number;
     };

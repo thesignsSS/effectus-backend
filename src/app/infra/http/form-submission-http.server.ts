@@ -948,6 +948,47 @@ export class FormSubmissionHttpServer {
           brokerUserId: effects.brokerUserId,
           nextStatus: effects.statusChangedTo,
         });
+
+        if (effects.brokerPhone) {
+          try {
+            this.logger.info('Iniciando envio de aviso de status da proposta ao corretor pelo WhatsApp', {
+              proposalId: effects.proposalId,
+              proposalCode: effects.proposalCode,
+              brokerUserId: effects.brokerUserId,
+              brokerPhone: effects.brokerPhone,
+              nextStatus: effects.statusChangedTo,
+            });
+
+            await this.whatsAppService.sendTextToPhone(
+              effects.brokerPhone,
+              [
+                'Sua proposta teve o status atualizado.',
+                `Proposta: ${effects.proposalCode}`,
+                `Novo status: ${result?.statusLabel ?? effects.statusChangedTo}`,
+                effects.pendingReason ? `Motivo da pendência: ${effects.pendingReason}` : undefined,
+                effects.adminComment ? `Comentário do admin: ${effects.adminComment}` : undefined,
+              ]
+                .filter((line): line is string => Boolean(line))
+                .join('\n'),
+            );
+
+            this.logger.info('Aviso de status da proposta enviado ao corretor pelo WhatsApp', {
+              proposalId: effects.proposalId,
+              proposalCode: effects.proposalCode,
+              brokerUserId: effects.brokerUserId,
+              brokerPhone: effects.brokerPhone,
+              nextStatus: effects.statusChangedTo,
+            });
+          } catch (error) {
+            this.logger.warn('Aviso de status da proposta não enviado ao corretor pelo WhatsApp', {
+              proposalId: effects.proposalId,
+              proposalCode: effects.proposalCode,
+              brokerUserId: effects.brokerUserId,
+              brokerPhone: effects.brokerPhone,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
       }
 
       if (effects?.commentAdded) {

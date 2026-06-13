@@ -35,6 +35,9 @@ export interface ProposalUpdateEffects {
   proposalCode: string;
   brokerUserId: string;
   brokerName: string;
+  brokerPhone: string;
+  pendingReason: string;
+  adminComment: string;
   actorUserId: string;
   actorRole: 'admin' | 'broker';
   actorName: string;

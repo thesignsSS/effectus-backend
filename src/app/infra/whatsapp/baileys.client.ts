@@ -119,11 +119,23 @@ export class BaileysClient implements MessagingProvider {
       throw new Error('WhatsApp socket is not connected');
     }
 
+    let targetChatId = chatId;
+
+    if (this.isDirectChat(chatId)) {
+      targetChatId = await this.resolveDirectRecipientChatId(chatId);
+    }
+
     const messageId = `bot_${randomUUID().replace(/-/g, '')}`;
     this.sentMessageIds.add(messageId);
 
     try {
-      await this.socket.sendMessage(chatId, { text }, { messageId });
+      await this.socket.sendMessage(targetChatId, { text }, { messageId });
+      this.logger.info('Mensagem enviada pelo WhatsApp', {
+        chatId: targetChatId,
+        originalChatId: chatId,
+        messageId,
+        directMessage: this.isDirectChat(chatId),
+      });
     } catch (error) {
       this.sentMessageIds.delete(messageId);
       throw error;
@@ -266,6 +278,42 @@ export class BaileysClient implements MessagingProvider {
         return media;
       },
     };
+  }
+
+  private isDirectChat(chatId: string): boolean {
+    return chatId.endsWith('@s.whatsapp.net');
+  }
+
+  private async resolveDirectRecipientChatId(chatId: string): Promise<string> {
+    if (!this.socket) {
+      throw new Error('WhatsApp socket is not connected');
+    }
+
+    const digits = chatId.split('@')[0]?.replace(/\D/g, '') ?? '';
+    const lookup = await this.socket.onWhatsApp(chatId, digits);
+    const recipient =
+      lookup?.find((entry) => this.isSameWhatsAppUser(entry.jid, chatId)) ??
+      lookup?.find((entry) => entry.exists) ??
+      null;
+
+    if (!recipient?.exists) {
+      this.logger.warn('Número do corretor não pôde ser validado antes do envio no WhatsApp', {
+        chatId,
+        digits,
+        lookupCount: lookup?.length ?? 0,
+      });
+      return chatId;
+    }
+
+    return recipient.jid || chatId;
+  }
+
+  private isSameWhatsAppUser(left: string | undefined, right: string): boolean {
+    if (!left) {
+      return false;
+    }
+
+    return left.split('@')[0] === right.split('@')[0];
   }
 
   private getSender(message: WAMessage, chatId: string): string {
