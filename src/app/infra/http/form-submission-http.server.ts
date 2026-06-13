@@ -13,6 +13,13 @@ import {
   ProposalStore,
 } from '../../domain/interfaces/proposal-store.interface.js';
 import { OneDriveService } from '../../services/onedrive.service.js';
+import { ChatService } from '../../services/chat.service.js';
+import { NotificationService } from '../../services/notification.service.js';
+import {
+  AssistantChatMessage,
+  EffectusAssistantService,
+} from '../../services/effectus-assistant.service.js';
+import { ChatRealtimeGateway } from './chat-realtime.gateway.js';
 import {
   FormSubmissionDocument,
   FormSubmissionInput,
@@ -43,6 +50,10 @@ export class FormSubmissionHttpServer {
     private readonly profileStore: ProfileStore,
     private readonly proposalStore: ProposalStore,
     private readonly storageService: OneDriveService,
+    private readonly chatService: ChatService,
+    private readonly notificationService: NotificationService,
+    private readonly effectusAssistantService: EffectusAssistantService,
+    private readonly chatRealtimeGateway: ChatRealtimeGateway,
     private readonly logger: Logger,
   ) {}
 
@@ -54,6 +65,7 @@ export class FormSubmissionHttpServer {
     this.server = http.createServer((request, response) => {
       void this.handle(request, response);
     });
+    this.chatRealtimeGateway.attach(this.server);
 
     this.server.listen(this.config.port, () => {
       this.logger.info('Servidor HTTP de cadastro iniciado', {
@@ -92,10 +104,77 @@ export class FormSubmissionHttpServer {
       return;
     }
 
+    if (request.method === 'GET' && requestUrl.pathname === '/api/notifications') {
+      await this.handleListNotifications(requestUrl, response);
+      return;
+    }
+
+    if (request.method === 'PATCH' && requestUrl.pathname === '/api/notifications/read-all') {
+      await this.handleMarkAllNotificationsAsRead(request, response);
+      return;
+    }
+
+    if (
+      request.method === 'PATCH' &&
+      requestUrl.pathname.match(/^\/api\/notifications\/[^/]+\/read$/)
+    ) {
+      await this.handleMarkNotificationAsRead(request, requestUrl, response);
+      return;
+    }
+
+    if (request.method === 'POST' && requestUrl.pathname === '/api/assistant/chat') {
+      await this.handleAssistantChat(request, response);
+      return;
+    }
+
+    if (request.method === 'GET' && requestUrl.pathname === '/api/chat/users') {
+      await this.handleListChatUsers(requestUrl, response);
+      return;
+    }
+
+    if (request.method === 'GET' && requestUrl.pathname === '/api/chat/conversations') {
+      await this.handleListChatConversations(requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'POST' &&
+      requestUrl.pathname === '/api/chat/conversations/direct'
+    ) {
+      await this.handleOpenDirectChatConversation(request, response);
+      return;
+    }
+
+    if (
+      request.method === 'GET' &&
+      requestUrl.pathname.match(/^\/api\/chat\/conversations\/[^/]+\/messages$/)
+    ) {
+      await this.handleListChatMessages(requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'PATCH' &&
+      requestUrl.pathname.match(/^\/api\/chat\/conversations\/[^/]+\/read$/)
+    ) {
+      await this.handleMarkChatConversationAsRead(request, requestUrl, response);
+      return;
+    }
+
+    if (request.method === 'POST' && requestUrl.pathname === '/api/chat/messages') {
+      await this.handleSendChatMessage(request, response);
+      return;
+    }
+
     if (request.method === 'GET' && requestUrl.pathname === '/api/proposals/statuses') {
       this.sendJson(response, 200, {
         items: PROPOSAL_STATUS_OPTIONS,
       });
+      return;
+    }
+
+    if (request.method === 'GET' && requestUrl.pathname === '/api/proposals/pending-summary') {
+      await this.handlePendingProposalsSummary(requestUrl, response);
       return;
     }
 
@@ -109,6 +188,14 @@ export class FormSubmissionHttpServer {
       requestUrl.pathname.match(/^\/api\/proposals\/[^/]+\/download$/)
     ) {
       await this.handleDownloadProposal(requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'GET' &&
+      requestUrl.pathname.match(/^\/api\/proposals\/[^/]+\/documents\/[^/]+\/download$/)
+    ) {
+      await this.handleDownloadProposalDocument(requestUrl, response);
       return;
     }
 
@@ -169,6 +256,14 @@ export class FormSubmissionHttpServer {
       const payload = await this.readJsonBody(request);
       const input = this.toFormSubmissionInput(payload);
       const result = await this.processFormSubmission.execute(input);
+
+      if (result.proposalId && result.proposalCode) {
+        await this.notificationService.notifyAdminsAboutSubmittedProposal({
+          proposalId: result.proposalId,
+          proposalCode: result.proposalCode,
+          brokerName: input.brokerName,
+        });
+      }
 
       this.sendJson(response, 201, {
         ok: true,
@@ -234,6 +329,305 @@ export class FormSubmissionHttpServer {
         userId,
       });
       this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handlePendingProposalsSummary(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const brokerUserId =
+      requestUrl.searchParams.get('brokerUserId')?.trim() ??
+      requestUrl.searchParams.get('userId')?.trim();
+
+    if (!brokerUserId) {
+      this.sendJson(response, 400, {
+        ok: false,
+        error: 'Campo obrigatório ausente: brokerUserId',
+      });
+      return;
+    }
+
+    try {
+      const pendingCount = await this.proposalStore.countPendingByBroker({
+        brokerUserId,
+      });
+
+      this.sendJson(response, 200, {
+        pendingCount,
+        hasPending: pendingCount > 0,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao consultar resumo de pendências', {
+        error: message,
+        brokerUserId,
+      });
+      this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handleAssistantChat(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    try {
+      const payload = await this.readJsonBody(request);
+      const message = readRequiredString(payload, 'message', 'pergunta');
+      const routePath = readOptionalString(payload, 'routePath', 'route');
+      const routeLabel = readOptionalString(payload, 'routeLabel', 'screen');
+      const userName = readOptionalString(payload, 'userName', 'nomeUsuario');
+      const history = readAssistantHistory(payload.history);
+      const result = await this.effectusAssistantService.answer({
+        message,
+        routePath,
+        routeLabel,
+        userName,
+        history,
+      });
+
+      this.sendJson(response, 200, {
+        ok: true,
+        blocked: result.blocked,
+        answer: result.answer,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      this.logger.error('Falha ao processar mensagem do assistente', {
+        error: message,
+      });
+
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
+    }
+  }
+
+  private async handleListNotifications(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const userId = readRequiredSearchParam(requestUrl, 'userId');
+
+    try {
+      const notifications = await this.notificationService.listByUser(userId);
+      this.sendJson(response, 200, { items: notifications });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao listar notificações', { error: message, userId });
+      this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handleMarkNotificationAsRead(
+    request: IncomingMessage,
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const payload = await this.readJsonBody(request);
+    const userId = readRequiredString(payload, 'userId', 'usuarioId');
+    const notificationId = getRequiredPathSegment(requestUrl.pathname, 2, 'notificationId');
+
+    try {
+      await this.notificationService.markAsRead(userId, notificationId);
+      this.sendJson(response, 200, { ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao marcar notificação como lida', {
+        error: message,
+        userId,
+        notificationId,
+      });
+      this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handleMarkAllNotificationsAsRead(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    const payload = await this.readJsonBody(request);
+    const userId = readRequiredString(payload, 'userId', 'usuarioId');
+
+    try {
+      await this.notificationService.markAllAsRead(userId);
+      this.sendJson(response, 200, { ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao marcar todas notificações como lidas', {
+        error: message,
+        userId,
+      });
+      this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handleListChatUsers(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const userId = readRequiredSearchParam(requestUrl, 'userId');
+
+    try {
+      const users = await this.chatService.listDirectoryUsers(userId);
+      this.sendJson(response, 200, { items: users });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao listar usuários do chat', { error: message, userId });
+      this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handleListChatConversations(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const userId = readRequiredSearchParam(requestUrl, 'userId');
+
+    try {
+      const conversations = await this.chatService.listConversations(userId);
+      this.sendJson(response, 200, { items: conversations });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao listar conversas do chat', { error: message, userId });
+      this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handleOpenDirectChatConversation(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    try {
+      const payload = await this.readJsonBody(request);
+      const userId = readRequiredString(payload, 'userId', 'usuarioId');
+      const targetUserId = readRequiredString(payload, 'targetUserId', 'destinatarioId');
+      const conversation = await this.chatService.openDirectConversation(
+        userId,
+        targetUserId,
+      );
+
+      this.sendJson(response, 200, { item: conversation });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao abrir conversa direta do chat', { error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
+    }
+  }
+
+  private async handleListChatMessages(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const userId = readRequiredSearchParam(requestUrl, 'userId');
+    const conversationId = getRequiredPathSegment(requestUrl.pathname, 3, 'conversationId');
+
+    try {
+      const conversation = await this.chatService.getConversationById(userId, conversationId);
+
+      if (!conversation) {
+        this.sendJson(response, 404, { ok: false, error: 'Conversa não encontrada' });
+        return;
+      }
+
+      const messages = await this.chatService.listMessages(userId, conversationId);
+      this.sendJson(response, 200, {
+        conversation,
+        items: messages,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao listar mensagens do chat', {
+        error: message,
+        userId,
+        conversationId,
+      });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
+    }
+  }
+
+  private async handleMarkChatConversationAsRead(
+    request: IncomingMessage,
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    try {
+      const payload = await this.readJsonBody(request);
+      const userId = readRequiredString(payload, 'userId', 'usuarioId');
+      const conversationId = getRequiredPathSegment(requestUrl.pathname, 3, 'conversationId');
+
+      await this.chatService.markConversationAsRead(userId, conversationId);
+      this.sendJson(response, 200, { ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao marcar conversa do chat como lida', {
+        error: message,
+      });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
+    }
+  }
+
+  private async handleSendChatMessage(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    try {
+      const payload = await this.readJsonBody(request);
+      const userId = readRequiredString(payload, 'userId', 'usuarioId');
+      const recipientUserId = readRequiredString(
+        payload,
+        'recipientUserId',
+        'destinatarioId',
+      );
+      const content = readRequiredString(payload, 'content', 'mensagem');
+      const result = await this.chatService.sendMessage({
+        senderUserId: userId,
+        recipientUserId,
+        content,
+      });
+      const recipientConversation = await this.chatService.getConversationById(
+        result.recipient.id,
+        result.conversation.id,
+      );
+
+      this.chatRealtimeGateway.emitChatMessage([userId], {
+        conversation: result.conversation,
+        message: result.message,
+      });
+
+      if (recipientConversation) {
+        this.chatRealtimeGateway.emitChatMessage([result.recipient.id], {
+          conversation: recipientConversation,
+          message: result.message,
+        });
+      }
+
+      if (result.notification) {
+        this.chatRealtimeGateway.emitNotification(result.recipient.id, result.notification);
+      }
+
+      this.sendJson(response, 201, {
+        conversation: result.conversation,
+        message: result.message,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao enviar mensagem do chat', { error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
@@ -431,6 +825,35 @@ export class FormSubmissionHttpServer {
         formData: readOptionalObject(payload, 'formData', 'data'),
         status,
       });
+
+      const effects = result?.effects;
+
+      if (effects?.statusChangedTo && effects.actorRole === 'admin') {
+        await this.notificationService.notifyBrokerAboutStatusChanged({
+          proposalId: effects.proposalId,
+          proposalCode: effects.proposalCode,
+          brokerUserId: effects.brokerUserId,
+          nextStatus: effects.statusChangedTo,
+        });
+      }
+
+      if (effects?.commentAdded) {
+        await this.notificationService.notifyAdminsAboutComment({
+          proposalId: effects.proposalId,
+          proposalCode: effects.proposalCode,
+          authorName: effects.actorName,
+          excludeUserId: effects.actorUserId,
+        });
+      }
+
+      if (effects?.resubmittedForAnalysis) {
+        await this.notificationService.notifyAdminsAboutResubmission({
+          proposalId: effects.proposalId,
+          proposalCode: effects.proposalCode,
+          brokerName: effects.brokerName,
+          excludeUserId: effects.actorUserId,
+        });
+      }
 
       this.sendJson(response, 200, {
         ok: true,
@@ -646,6 +1069,52 @@ export class FormSubmissionHttpServer {
     }
   }
 
+  private async handleDownloadProposalDocument(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const brokerUserId = requestUrl.searchParams.get('brokerUserId')?.trim();
+    if (!brokerUserId) {
+      this.sendJson(response, 400, { ok: false, error: 'Campo obrigatório ausente: brokerUserId' });
+      return;
+    }
+
+    const proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
+    const documentId = getRequiredPathSegment(requestUrl.pathname, 4, 'documentId');
+
+    try {
+      const document = await this.proposalStore.getDocument({
+        brokerUserId,
+        proposalId,
+        documentId,
+      });
+
+      if (!document) {
+        this.sendJson(response, 404, { ok: false, error: 'Documento não encontrado' });
+        return;
+      }
+
+      const buffer = await this.storageService.download(document.storageLocation);
+      const filename = sanitizeFileName(
+        document.originalFilename || document.filename,
+      );
+
+      response.writeHead(200, {
+        'Content-Type': document.contentType || 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+      });
+      response.end(buffer);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao baixar documento da proposta', {
+        error: message,
+        proposalId,
+        documentId,
+      });
+      this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
   private async handleDownloadProposal(
     requestUrl: URL,
     response: ServerResponse,
@@ -768,6 +1237,16 @@ function readRequiredString(
   return value.trim();
 }
 
+function readRequiredSearchParam(requestUrl: URL, key: string): string {
+  const value = requestUrl.searchParams.get(key)?.trim();
+
+  if (!value) {
+    throw new Error(`Campo obrigatório ausente: ${key}`);
+  }
+
+  return value;
+}
+
 function readOptionalString(
   payload: JsonObject,
   primaryKey: string,
@@ -794,6 +1273,36 @@ function readOptionalObject(
   }
 
   return value;
+}
+
+function readAssistantHistory(value: JsonValue | undefined): AssistantChatMessage[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item) => {
+    if (!isJsonObject(item)) {
+      return [];
+    }
+
+    const role = item.role;
+    const content = item.content;
+
+    if (
+      (role !== 'user' && role !== 'assistant') ||
+      typeof content !== 'string' ||
+      !content.trim()
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        role,
+        content: content.trim(),
+      },
+    ];
+  });
 }
 
 function readOptionalProposalStatus(payload: JsonObject): ProposalStatus | undefined {

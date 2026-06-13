@@ -30,6 +30,19 @@ export interface ProposalStatusInfo {
   statusLabel: string;
 }
 
+export interface ProposalUpdateEffects {
+  proposalId: string;
+  proposalCode: string;
+  brokerUserId: string;
+  brokerName: string;
+  actorUserId: string;
+  actorRole: 'admin' | 'broker';
+  actorName: string;
+  statusChangedTo?: ProposalStatus;
+  commentAdded: boolean;
+  resubmittedForAnalysis: boolean;
+}
+
 export interface ProposalStatusOption {
   value: ProposalStatus;
   label: string;
@@ -165,7 +178,10 @@ export interface ProposalListResult {
 
 export interface ProposalStore {
   create(input: CreateProposalInput): Promise<{ id: string; proposalCode: string } & ProposalStatusInfo>;
-  update(input: UpdateProposalInput): Promise<ProposalStatusInfo | undefined>;
+  update(input: UpdateProposalInput): Promise<(ProposalStatusInfo & { effects?: ProposalUpdateEffects }) | undefined>;
+  countPendingByBroker(input: {
+    brokerUserId: string;
+  }): Promise<number>;
   listByBroker(input: {
     brokerUserId: string;
     ownerBrokerUserId?: string;

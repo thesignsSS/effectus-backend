@@ -14,6 +14,7 @@ import {
   ProposalStatus,
   ProposalStatusInfo,
   PROPOSAL_STATUS_OPTIONS,
+  ProposalUpdateEffects,
   RenameProposalDocumentInput,
   UpdateProposalInput,
 } from '../../domain/interfaces/proposal-store.interface.js';
@@ -123,7 +124,7 @@ export class SupabaseProposalStore implements ProposalStore {
     };
   }
 
-  async update(input: UpdateProposalInput): Promise<ProposalStatusInfo | undefined> {
+  async update(input: UpdateProposalInput): Promise<(ProposalStatusInfo & { effects?: ProposalUpdateEffects }) | undefined> {
     const access = await this.resolveAccess(input.brokerUserId);
     const currentProposal = await this.getProposalForUpdate(
       input.proposalId,
@@ -152,6 +153,8 @@ export class SupabaseProposalStore implements ProposalStore {
     const currentStatus = toStatusInfo(currentProposal.status).status;
     const nextStatus = input.status;
     const nextComments = normalizeProposalComments(currentProposal.proposal_comments);
+    let commentAdded = false;
+    let resubmittedForAnalysis = false;
 
     if (nextStatus !== undefined) {
       if (access.isAdmin) {
@@ -190,6 +193,7 @@ export class SupabaseProposalStore implements ProposalStore {
             type: 'resubmission',
           }),
         );
+        resubmittedForAnalysis = true;
       }
 
       payload.status = nextStatus;
@@ -211,6 +215,7 @@ export class SupabaseProposalStore implements ProposalStore {
             type: 'comment',
           }),
         );
+        commentAdded = true;
       }
     }
 
@@ -238,7 +243,26 @@ export class SupabaseProposalStore implements ProposalStore {
       throw new Error(`Supabase proposal update failed: ${error.message}`);
     }
 
-    return input.status !== undefined ? toStatusInfo(data.status) : undefined;
+    const statusInfo =
+      input.status !== undefined
+        ? toStatusInfo(data.status)
+        : toStatusInfo(currentProposal.status);
+
+    return {
+      ...statusInfo,
+      effects: {
+        proposalId: input.proposalId,
+        proposalCode: currentProposal.proposalCode,
+        brokerUserId: currentProposal.broker_user_id,
+        brokerName: currentProposal.broker_name ?? 'Corretor',
+        actorUserId: input.brokerUserId,
+        actorRole: access.role,
+        actorName: getAccessDisplayName(access),
+        statusChangedTo: nextStatus,
+        commentAdded,
+        resubmittedForAnalysis,
+      },
+    };
   }
 
   async listByBroker(input: {
@@ -304,6 +328,20 @@ export class SupabaseProposalStore implements ProposalStore {
       page: input.page,
       pageSize: input.pageSize,
     };
+  }
+
+  async countPendingByBroker(input: { brokerUserId: string }): Promise<number> {
+    const { count, error } = await this.client
+      .from('proposals')
+      .select('id', { count: 'exact', head: true })
+      .eq('broker_user_id', input.brokerUserId)
+      .eq('status', 'pendente');
+
+    if (error) {
+      throw new Error(`Supabase pending proposals count failed: ${error.message}`);
+    }
+
+    return count ?? 0;
   }
 
   async getById(input: {
@@ -603,10 +641,13 @@ export class SupabaseProposalStore implements ProposalStore {
   private async getProposalForUpdate(
     proposalId: string,
     brokerUserId?: string,
-  ): Promise<Pick<ProposalRow, 'status' | 'proposal_comments'> | null> {
+  ): Promise<(Pick<ProposalRow, 'status' | 'proposal_comments' | 'broker_name'> & {
+    proposalCode: string;
+    broker_user_id: string;
+  }) | null> {
     let query = this.client
       .from('proposals')
-      .select('status, proposal_comments')
+      .select('status, proposal_comments, broker_name, broker_user_id, proposal_number')
       .eq('id', proposalId);
 
     if (brokerUserId) {
@@ -623,7 +664,15 @@ export class SupabaseProposalStore implements ProposalStore {
       throw new Error(`Supabase proposal update context failed: ${error.message}`);
     }
 
-    return data as Pick<ProposalRow, 'status' | 'proposal_comments'>;
+    const row = data as Pick<ProposalRow, 'status' | 'proposal_comments' | 'broker_name'> & {
+      broker_user_id: string;
+      proposal_number: number;
+    };
+
+    return {
+      ...row,
+      proposalCode: formatProposalCode(row.proposal_number),
+    };
   }
 }
 
