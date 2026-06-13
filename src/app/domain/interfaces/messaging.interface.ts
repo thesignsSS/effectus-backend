@@ -21,4 +21,5 @@ export interface MessagingProvider {
   onDocumentReceived(handler: (message: IncomingMessage) => Promise<void>): void;
   sendText(chatId: string, text: string): Promise<void>;
   sendTextToConfiguredChat(text: string): Promise<void>;
+  terminateSession(): Promise<void>;
 }

@@ -19,7 +19,9 @@ import {
   AssistantChatMessage,
   EffectusAssistantService,
 } from '../../services/effectus-assistant.service.js';
+import { WhatsAppService } from '../../services/whatsapp.service.js';
 import { ChatRealtimeGateway } from './chat-realtime.gateway.js';
+import { WebQrCodePresenter } from '../qrcode/web-qr-code.presenter.js';
 import {
   FormSubmissionDocument,
   FormSubmissionInput,
@@ -54,6 +56,8 @@ export class FormSubmissionHttpServer {
     private readonly notificationService: NotificationService,
     private readonly effectusAssistantService: EffectusAssistantService,
     private readonly chatRealtimeGateway: ChatRealtimeGateway,
+    private readonly whatsAppService: WhatsAppService,
+    private readonly webQrCodePresenter: WebQrCodePresenter,
     private readonly logger: Logger,
   ) {}
 
@@ -124,6 +128,16 @@ export class FormSubmissionHttpServer {
 
     if (request.method === 'POST' && requestUrl.pathname === '/api/assistant/chat') {
       await this.handleAssistantChat(request, response);
+      return;
+    }
+
+    if (request.method === 'GET' && requestUrl.pathname === '/api/admin/whatsapp/state') {
+      await this.handleAdminWhatsAppState(requestUrl, response);
+      return;
+    }
+
+    if (request.method === 'DELETE' && requestUrl.pathname === '/api/admin/whatsapp/session') {
+      await this.handleAdminWhatsAppSessionReset(request, requestUrl, response);
       return;
     }
 
@@ -341,6 +355,76 @@ export class FormSubmissionHttpServer {
     }
   }
 
+  private async handleAdminWhatsAppState(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const userId = requestUrl.searchParams.get('userId')?.trim();
+
+    if (!userId) {
+      this.sendJson(response, 400, {
+        ok: false,
+        error: 'Campo obrigatório ausente: userId',
+      });
+      return;
+    }
+
+    try {
+      await this.requireAdminUser(userId);
+      const state = await this.webQrCodePresenter.getStateSnapshot();
+
+      this.sendJson(response, 200, {
+        ok: true,
+        connectionStatus: state.connectionStatus,
+        qrCode: state.qrCode,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao consultar estado do WhatsApp admin', {
+        error: message,
+        userId,
+      });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
+    }
+  }
+
+  private async handleAdminWhatsAppSessionReset(
+    request: IncomingMessage,
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const userId =
+      requestUrl.searchParams.get('userId')?.trim() ??
+      (await this.readJsonBody(request).catch(() => ({} as JsonObject))).userId;
+
+    if (typeof userId !== 'string' || !userId.trim()) {
+      this.sendJson(response, 400, {
+        ok: false,
+        error: 'Campo obrigatório ausente: userId',
+      });
+      return;
+    }
+
+    try {
+      await this.requireAdminUser(userId.trim());
+      await this.whatsAppService.terminateSession();
+      this.sendJson(response, 200, { ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao encerrar sessão do WhatsApp admin', {
+        error: message,
+        userId,
+      });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
+    }
+  }
+
   private async handlePendingProposalsSummary(
     requestUrl: URL,
     response: ServerResponse,
@@ -374,6 +458,24 @@ export class FormSubmissionHttpServer {
       });
       this.sendJson(response, 500, { ok: false, error: message });
     }
+  }
+
+  private async requireAdminUser(userId: string) {
+    const profile = await this.profileStore.getById(userId);
+
+    if (!profile) {
+      throw new Error('Perfil não encontrado');
+    }
+
+    if (!profile.isActive) {
+      throw new Error('Perfil inativo');
+    }
+
+    if (!profile.isAdmin) {
+      throw new Error('Apenas admin pode acessar este recurso');
+    }
+
+    return profile;
   }
 
   private async handleAssistantChat(
@@ -1254,7 +1356,11 @@ export class FormSubmissionHttpServer {
   }
 
   private statusFromError(message: string): number {
-    if (message.includes('Apenas admin') || message.includes('Sem permissão')) {
+    if (
+      message.includes('Apenas admin') ||
+      message.includes('Sem permissão') ||
+      message.includes('Perfil inativo')
+    ) {
       return 403;
     }
 

@@ -91,6 +91,11 @@ export class WebQrCodePresenter implements QrCodePresenter, DashboardPresenter {
     });
   }
 
+  clear(): void {
+    this.latestQrCode = undefined;
+    this.broadcast('qr', null);
+  }
+
   updateConnectionStatus(status: WhatsAppConnectionStatus): void {
     this.connectionStatus = status;
     this.broadcast('connection', {
@@ -112,6 +117,10 @@ export class WebQrCodePresenter implements QrCodePresenter, DashboardPresenter {
 
   private async handleStateRequest(response: ServerResponse): Promise<void> {
     this.sendJson(response, await this.getState());
+  }
+
+  async getStateSnapshot(): Promise<DashboardState> {
+    return this.getState();
   }
 
   private async handleDocumentsRequest(response: ServerResponse): Promise<void> {

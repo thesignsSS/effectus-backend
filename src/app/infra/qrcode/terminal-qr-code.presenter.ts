@@ -5,4 +5,6 @@ export class TerminalQrCodePresenter implements QrCodePresenter {
   show(qrCode: string): void {
     qrcode.generate(qrCode, { small: true });
   }
+
+  clear(): void {}
 }

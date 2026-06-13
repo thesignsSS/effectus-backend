@@ -6,4 +6,8 @@ export class CompositeQrCodePresenter implements QrCodePresenter {
   show(qrCode: string): void {
     this.presenters.forEach((presenter) => presenter.show(qrCode));
   }
+
+  clear(): void {
+    this.presenters.forEach((presenter) => presenter.clear());
+  }
 }

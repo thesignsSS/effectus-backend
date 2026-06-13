@@ -7,6 +7,7 @@ import makeWASocket, {
   WAMessage,
 } from '@whiskeysockets/baileys';
 import { randomUUID } from 'node:crypto';
+import { rm } from 'node:fs/promises';
 import { FileExtension } from '../../domain/constants/file.constants.js';
 import { DashboardPresenter } from '../../domain/interfaces/dashboard.interface.js';
 import { Logger } from '../../domain/interfaces/logger.interface.js';
@@ -132,6 +133,41 @@ export class BaileysClient implements MessagingProvider {
   async sendTextToConfiguredChat(text: string): Promise<void> {
     const chatId = await this.getConfiguredChatId();
     await this.sendText(chatId, text);
+  }
+
+  async terminateSession(): Promise<void> {
+    this.logger.warn('Encerrando sessão do WhatsApp manualmente');
+
+    try {
+      await this.socket?.logout();
+    } catch (error) {
+      this.logger.warn('Falha ao fazer logout do WhatsApp antes de limpar a sessão', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    try {
+      this.socket?.end(new Error('Sessão encerrada manualmente'));
+    } catch (error) {
+      this.logger.warn('Falha ao encerrar socket do WhatsApp', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    this.socket = undefined;
+    this.groupNameCache.clear();
+    this.sentMessageIds.clear();
+    this.qrCodePresenter.clear();
+    this.dashboardPresenter?.updateConnectionStatus('disconnected');
+
+    await rm(this.config.sessionDir, { recursive: true, force: true }).catch((error) => {
+      this.logger.warn('Falha ao limpar diretório da sessão do WhatsApp', {
+        sessionDir: this.config.sessionDir,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+
+    await this.connect();
   }
 
   private async toIncomingMessage(message: WAMessage): Promise<IncomingMessage | null> {

@@ -144,6 +144,8 @@ export function buildApp(): WhatsAppController {
     notificationService,
     effectusAssistantService,
     chatRealtimeGateway,
+    whatsAppService,
+    webQrCodePresenter,
     logger,
   ).start();
   const remittanceSessionService = new RemittanceSessionService();

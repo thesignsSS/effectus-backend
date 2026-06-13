@@ -21,4 +21,8 @@ export class WhatsAppService {
   sendTextToConfiguredChat(text: string): Promise<void> {
     return this.messagingProvider.sendTextToConfiguredChat(text);
   }
+
+  terminateSession(): Promise<void> {
+    return this.messagingProvider.terminateSession();
+  }
 }
