@@ -32,6 +32,15 @@ type OutboundEvent =
   | {
       type: 'notification_created';
       notification: NotificationItem;
+    }
+  | {
+      type: 'chat_presence_snapshot';
+      onlineUserIds: string[];
+    }
+  | {
+      type: 'chat_presence';
+      userId: string;
+      isOnline: boolean;
     };
 
 export interface ChatRealtimeGatewayConfig {
@@ -99,8 +108,24 @@ export class ChatRealtimeGateway {
 
   private handleConnection(socket: WebSocket, _request: http.IncomingMessage, userId: string) {
     const existingSockets = this.socketsByUserId.get(userId) ?? new Set<WebSocket>();
+    const wasOffline = existingSockets.size === 0;
     existingSockets.add(socket);
     this.socketsByUserId.set(userId, existingSockets);
+
+    socket.send(
+      JSON.stringify({
+        type: 'chat_presence_snapshot',
+        onlineUserIds: Array.from(this.socketsByUserId.keys()),
+      } satisfies OutboundEvent),
+    );
+
+    if (wasOffline) {
+      this.broadcast(Array.from(this.socketsByUserId.keys()), {
+        type: 'chat_presence',
+        userId,
+        isOnline: true,
+      });
+    }
 
     socket.on('message', (rawMessage) => {
       try {
@@ -137,6 +162,11 @@ export class ChatRealtimeGateway {
 
       if (userSockets.size === 0) {
         this.socketsByUserId.delete(userId);
+        this.broadcast(Array.from(this.socketsByUserId.keys()), {
+          type: 'chat_presence',
+          userId,
+          isOnline: false,
+        });
       }
     });
   }

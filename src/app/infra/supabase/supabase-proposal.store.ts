@@ -2,6 +2,8 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { randomUUID } from 'node:crypto';
 import {
   CreateProposalInput,
+  DeleteProposalInput,
+  DeleteProposalResult,
   DeleteProposalDocumentInput,
   ProposalComment,
   ProposalCommentType,
@@ -479,6 +481,56 @@ export class SupabaseProposalStore implements ProposalStore {
     }
 
     return document;
+  }
+
+  async delete(input: DeleteProposalInput): Promise<DeleteProposalResult | null> {
+    const access = await this.resolveAccess(input.brokerUserId);
+    let query = this.client
+      .from('proposals')
+      .select(`
+        id,
+        broker_user_id,
+        proposal_documents (
+          storage_location
+        )
+      `)
+      .eq('id', input.proposalId);
+
+    if (!access.isAdmin) {
+      query = query.eq('broker_user_id', input.brokerUserId);
+    }
+
+    const { data, error } = await query.single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return null;
+      }
+
+      throw new Error(`Supabase proposal delete lookup failed: ${error.message}`);
+    }
+
+    const documentLocations =
+      ((data.proposal_documents as Array<{ storage_location: string | null }> | null) ?? [])
+        .map((item) => item.storage_location?.trim() ?? '')
+        .filter(Boolean);
+
+    let deleteQuery = this.client.from('proposals').delete().eq('id', input.proposalId);
+
+    if (!access.isAdmin) {
+      deleteQuery = deleteQuery.eq('broker_user_id', input.brokerUserId);
+    }
+
+    const { error: deleteError } = await deleteQuery;
+
+    if (deleteError) {
+      throw new Error(`Supabase proposal delete failed: ${deleteError.message}`);
+    }
+
+    return {
+      proposalId: input.proposalId,
+      documentLocations,
+    };
   }
 
   async addDocuments(input: {

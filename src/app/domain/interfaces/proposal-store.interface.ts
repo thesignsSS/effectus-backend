@@ -143,6 +143,16 @@ export interface ProposalDocumentLookup {
   uploadedAt: string;
 }
 
+export interface DeleteProposalInput {
+  brokerUserId: string;
+  proposalId: string;
+}
+
+export interface DeleteProposalResult {
+  proposalId: string;
+  documentLocations: string[];
+}
+
 export interface ProposalDetail {
   id: string;
   proposalCode: string;
@@ -198,6 +208,7 @@ export interface ProposalStore {
     proposalId: string;
     documentId: string;
   }): Promise<ProposalDocumentLookup | null>;
+  delete(input: DeleteProposalInput): Promise<DeleteProposalResult | null>;
   renameDocument(input: RenameProposalDocumentInput): Promise<void>;
   deleteDocument(input: DeleteProposalDocumentInput): Promise<ProposalDocumentLookup | null>;
   addDocuments(input: {

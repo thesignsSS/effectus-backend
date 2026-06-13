@@ -232,6 +232,14 @@ export class FormSubmissionHttpServer {
     }
 
     if (
+      request.method === 'DELETE' &&
+      requestUrl.pathname.match(/^\/api\/proposals\/[^/]+$/)
+    ) {
+      await this.handleDeleteProposal(requestUrl, response);
+      return;
+    }
+
+    if (
       request.method === 'PATCH' &&
       requestUrl.pathname.match(/^\/api\/proposals\/[^/]+$/)
     ) {
@@ -1029,6 +1037,47 @@ export class FormSubmissionHttpServer {
     }
   }
 
+  private async handleDeleteProposal(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const brokerUserId = requestUrl.searchParams.get('brokerUserId')?.trim();
+    if (!brokerUserId) {
+      this.sendJson(response, 400, { ok: false, error: 'Campo obrigatório ausente: brokerUserId' });
+      return;
+    }
+
+    const proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
+
+    try {
+      const result = await this.proposalStore.delete({
+        brokerUserId,
+        proposalId,
+      });
+
+      if (!result) {
+        this.sendJson(response, 404, { ok: false, error: 'Proposta não encontrada' });
+        return;
+      }
+
+      await Promise.all(
+        result.documentLocations.map((location) =>
+          this.storageService.delete(location).catch(() => undefined),
+        ),
+      );
+
+      this.sendJson(response, 200, { ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao excluir proposta', {
+        error: message,
+        proposalId,
+        brokerUserId,
+      });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
+    }
+  }
+
   private async handleViewProposalDocument(
     requestUrl: URL,
     response: ServerResponse,
@@ -1204,7 +1253,7 @@ export class FormSubmissionHttpServer {
   }
 
   private statusFromError(message: string): number {
-    if (message.includes('Apenas admin')) {
+    if (message.includes('Apenas admin') || message.includes('Sem permissão')) {
       return 403;
     }
 
