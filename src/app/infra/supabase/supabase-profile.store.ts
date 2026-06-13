@@ -31,7 +31,7 @@ export class SupabaseProfileStore implements ProfileStore {
   async getById(userId: string): Promise<UserProfile | null> {
     const { data, error } = await this.client
       .from('profiles')
-      .select('id, full_name, role')
+      .select('id, full_name, role, is_active')
       .eq('id', userId)
       .single();
 
@@ -50,6 +50,7 @@ export class SupabaseProfileStore implements ProfileStore {
       fullName: data.full_name ?? '',
       role,
       isAdmin: role === 'admin',
+      isActive: data.is_active !== false,
     };
   }
 }

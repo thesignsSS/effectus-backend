@@ -136,7 +136,8 @@ export class SupabaseNotificationStore implements NotificationStore {
     const { data, error } = await this.client
       .from('profiles')
       .select('id')
-      .eq('role', role);
+      .eq('role', role)
+      .eq('is_active', true);
 
     if (error) {
       throw new Error(`Supabase profiles by role failed: ${error.message}`);

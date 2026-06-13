@@ -64,6 +64,7 @@ export class SupabaseChatStore implements ChatStore {
     const { data, error } = await this.client
       .from('profiles')
       .select('id, full_name, role')
+      .eq('is_active', true)
       .neq('id', excludeUserId)
       .order('full_name', { ascending: true });
 

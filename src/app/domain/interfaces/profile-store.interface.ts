@@ -5,6 +5,7 @@ export interface UserProfile {
   fullName: string;
   role: UserRole;
   isAdmin: boolean;
+  isActive: boolean;
 }
 
 export interface ProfileStore {
