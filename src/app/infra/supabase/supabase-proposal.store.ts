@@ -729,7 +729,7 @@ export class SupabaseProposalStore implements ProposalStore {
 }
 
 function formatProposalCode(proposalNumber: number): string {
-  return `RB-${String(proposalNumber).padStart(4, '0')}`;
+  return `PROP-${String(proposalNumber).padStart(3, '0')}`;
 }
 
 function toStatusInfo(status: string | null | undefined): ProposalStatusInfo {
@@ -817,7 +817,7 @@ function escapeLike(value: string): string {
 }
 
 function parseProposalNumber(value: string): number | null {
-  const digits = value.replace(/^RB-/i, '').replace(/\D/g, '');
+  const digits = value.replace(/^(RB|PROP)-/i, '').replace(/\D/g, '');
 
   if (!digits) {
     return null;
