@@ -378,12 +378,14 @@ export class FormSubmissionHttpServer {
       const routeLabel = readOptionalString(payload, 'routeLabel', 'screen');
       const userName = readOptionalString(payload, 'userName', 'nomeUsuario');
       const history = readAssistantHistory(payload.history);
+      const proposalContext = readAssistantProposalContext(payload.proposalContext);
       const result = await this.effectusAssistantService.answer({
         message,
         routePath,
         routeLabel,
         userName,
         history,
+        proposalContext,
       });
 
       this.sendJson(response, 200, {
@@ -1303,6 +1305,76 @@ function readAssistantHistory(value: JsonValue | undefined): AssistantChatMessag
       },
     ];
   });
+}
+
+function readAssistantProposalContext(value: JsonValue | undefined) {
+  if (!isJsonObject(value)) {
+    return null;
+  }
+
+  const proposalId = typeof value.proposalId === 'string' ? value.proposalId.trim() : '';
+  const proposalCode = typeof value.proposalCode === 'string' ? value.proposalCode.trim() : '';
+
+  if (!proposalId || !proposalCode) {
+    return null;
+  }
+
+  const tasks = Array.isArray(value.tasks)
+    ? value.tasks.flatMap((task) => {
+        if (!isJsonObject(task) || typeof task.title !== 'string' || !task.title.trim()) {
+          return [];
+        }
+
+        return [
+          {
+            title: task.title.trim(),
+            detail: typeof task.detail === 'string' ? task.detail.trim() : '',
+            status: typeof task.status === 'string' ? task.status.trim() : 'pendente',
+          },
+        ];
+      })
+    : [];
+
+  const latestComment = isJsonObject(value.latestComment)
+    ? {
+        authorName:
+          typeof value.latestComment.authorName === 'string'
+            ? value.latestComment.authorName.trim()
+            : '',
+        authorRole:
+          typeof value.latestComment.authorRole === 'string'
+            ? value.latestComment.authorRole.trim()
+            : '',
+        message:
+          typeof value.latestComment.message === 'string'
+            ? value.latestComment.message.trim()
+            : '',
+        createdAt:
+          typeof value.latestComment.createdAt === 'string'
+            ? value.latestComment.createdAt.trim()
+            : '',
+        type:
+          typeof value.latestComment.type === 'string'
+            ? value.latestComment.type.trim()
+            : '',
+      }
+    : null;
+
+  return {
+    proposalId,
+    proposalCode,
+    status: typeof value.status === 'string' ? value.status.trim() : '',
+    statusLabel: typeof value.statusLabel === 'string' ? value.statusLabel.trim() : '',
+    brokerName: typeof value.brokerName === 'string' ? value.brokerName.trim() : '',
+    clientName: typeof value.clientName === 'string' ? value.clientName.trim() : '',
+    propertyCity: typeof value.propertyCity === 'string' ? value.propertyCity.trim() : '',
+    pendingReason:
+      typeof value.pendingReason === 'string' ? value.pendingReason.trim() : '',
+    nextStepLabel:
+      typeof value.nextStepLabel === 'string' ? value.nextStepLabel.trim() : '',
+    tasks,
+    latestComment,
+  };
 }
 
 function readOptionalProposalStatus(payload: JsonObject): ProposalStatus | undefined {

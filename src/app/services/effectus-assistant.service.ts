@@ -14,6 +14,29 @@ export interface AssistantChatInput {
   routePath?: string;
   routeLabel?: string;
   userName?: string;
+  proposalContext?: {
+    proposalId: string;
+    proposalCode: string;
+    status: string;
+    statusLabel: string;
+    brokerName: string;
+    clientName: string;
+    propertyCity: string;
+    pendingReason: string;
+    nextStepLabel: string;
+    tasks: Array<{
+      title: string;
+      detail: string;
+      status: string;
+    }>;
+    latestComment: {
+      authorName: string;
+      authorRole: string;
+      message: string;
+      createdAt: string;
+      type: string;
+    } | null;
+  } | null;
 }
 
 export interface AssistantChatOutput {
@@ -116,12 +139,15 @@ export class EffectusAssistantService {
               `Nome do usuário atual: ${input.userName?.trim() || 'Não informado'}`,
               `Tela atual: ${input.routeLabel?.trim() || 'Não informada'}`,
               `Rota atual: ${input.routePath?.trim() || 'Não informada'}`,
+              formatProposalContext(input.proposalContext),
               'Presuma que a pergunta do usuário é sobre o Effectus, salvo quando ela claramente estiver fora desse contexto.',
               'Não faça perguntas de confirmação como "você quis dizer sobre o Effectus?".',
               'Se o nome do usuário estiver disponível, use o primeiro nome só quando ajudar; não repita o nome sem necessidade.',
               'Nunca diga ou implique que o usuário é o assistente.',
               'Se a pergunta fugir do escopo, recuse com gentileza e redirecione.',
               'Nunca responda com detalhes técnicos.',
+              'Quando houver contexto de proposta, priorize responder com base nele e cite o próximo passo mais útil.',
+              'Se houver pendências, organize a resposta em ordem prática: revisar, ajustar, anexar e reenviar.',
               'Seja breve e direto.',
               'Evite saudações longas, introduções desnecessárias e fechamento com pergunta.',
               'Prefira respostas em poucas linhas ou passos curtos.',
@@ -171,4 +197,45 @@ export class EffectusAssistantService {
     this.cachedPolicy = await fs.readFile(this.config.policyFilePath, 'utf-8');
     return this.cachedPolicy;
   }
+}
+
+function formatProposalContext(
+  proposalContext: AssistantChatInput['proposalContext'],
+) {
+  if (!proposalContext) {
+    return 'Contexto da proposta: não informado';
+  }
+
+  const tasks =
+    proposalContext.tasks.length > 0
+      ? proposalContext.tasks
+          .map((task, index) => {
+            const detail = task.detail?.trim() ? ` (${task.detail.trim()})` : '';
+            return `${index + 1}. ${task.title} [${task.status}]${detail}`;
+          })
+          .join('\n')
+      : 'Sem checklist gerado';
+
+  const latestComment = proposalContext.latestComment
+    ? [
+        `Último comentário: ${proposalContext.latestComment.authorName} (${proposalContext.latestComment.authorRole})`,
+        `Tipo: ${proposalContext.latestComment.type}`,
+        `Mensagem: ${proposalContext.latestComment.message}`,
+      ].join('\n')
+    : 'Último comentário: não informado';
+
+  return [
+    'Contexto da proposta:',
+    `ID: ${proposalContext.proposalId}`,
+    `Código: ${proposalContext.proposalCode}`,
+    `Status: ${proposalContext.statusLabel} (${proposalContext.status})`,
+    `Corretor: ${proposalContext.brokerName}`,
+    `Cliente: ${proposalContext.clientName}`,
+    `Cidade do imóvel: ${proposalContext.propertyCity || 'Não informada'}`,
+    `Motivo atual da pendência: ${proposalContext.pendingReason || 'Não informado'}`,
+    `Próximo passo sugerido: ${proposalContext.nextStepLabel}`,
+    'Checklist operacional:',
+    tasks,
+    latestComment,
+  ].join('\n');
 }
