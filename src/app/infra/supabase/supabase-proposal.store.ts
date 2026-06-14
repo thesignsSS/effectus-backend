@@ -276,6 +276,9 @@ export class SupabaseProposalStore implements ProposalStore {
     brokerUserId: string;
     ownerBrokerUserId?: string;
     search?: string;
+    clientName?: string;
+    brokerName?: string;
+    proposalCode?: string;
     page: number;
     pageSize: number;
   }): Promise<ProposalListResult> {
@@ -315,6 +318,27 @@ export class SupabaseProposalStore implements ProposalStore {
       query = query.or(
         filters.join(','),
       );
+    }
+
+    const normalizedClientName = input.clientName?.trim();
+    if (normalizedClientName) {
+      query = query.ilike('client_name', `%${escapeLike(normalizedClientName)}%`);
+    }
+
+    const normalizedBrokerName = input.brokerName?.trim();
+    if (normalizedBrokerName) {
+      query = query.ilike('broker_name', `%${escapeLike(normalizedBrokerName)}%`);
+    }
+
+    const normalizedProposalCode = input.proposalCode?.trim();
+    if (normalizedProposalCode) {
+      const proposalNumber = parseProposalNumber(normalizedProposalCode);
+
+      if (proposalNumber !== null) {
+        query = query.eq('proposal_number', proposalNumber);
+      } else {
+        query = query.eq('proposal_number', -1);
+      }
     }
 
     const { data, count, error } = await query;

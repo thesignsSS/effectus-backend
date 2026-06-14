@@ -199,6 +199,9 @@ export interface ProposalStore {
     brokerUserId: string;
     ownerBrokerUserId?: string;
     search?: string;
+    clientName?: string;
+    brokerName?: string;
+    proposalCode?: string;
     page: number;
     pageSize: number;
   }): Promise<ProposalListResult>;

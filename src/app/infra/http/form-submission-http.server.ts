@@ -836,12 +836,18 @@ export class FormSubmissionHttpServer {
     const ownerBrokerUserId =
       requestUrl.searchParams.get('ownerBrokerUserId')?.trim() ?? undefined;
     const search = requestUrl.searchParams.get('search')?.trim() ?? undefined;
+    const clientName = requestUrl.searchParams.get('clientName')?.trim() ?? undefined;
+    const brokerName = requestUrl.searchParams.get('brokerName')?.trim() ?? undefined;
+    const proposalCode = requestUrl.searchParams.get('proposalCode')?.trim() ?? undefined;
 
     try {
       const result = await this.proposalStore.listByBroker({
         brokerUserId,
         ownerBrokerUserId,
         search,
+        clientName,
+        brokerName,
+        proposalCode,
         page,
         pageSize,
       });
@@ -883,10 +889,19 @@ export class FormSubmissionHttpServer {
     }
 
     try {
-      const proposal = await this.proposalStore.getById({
+      this.logger.info('Iniciando busca de proposta por id', {
         brokerUserId,
         proposalId,
       });
+
+      const proposal = await withTimeout(
+        this.proposalStore.getById({
+          brokerUserId,
+          proposalId,
+        }),
+        15000,
+        'Tempo limite excedido ao buscar proposta',
+      );
 
       if (!proposal) {
         this.sendJson(response, 404, {
@@ -896,6 +911,10 @@ export class FormSubmissionHttpServer {
         return;
       }
 
+      this.logger.info('Busca de proposta finalizada com sucesso', {
+        brokerUserId,
+        proposalId,
+      });
       this.sendJson(response, 200, proposal as unknown as JsonObject);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1572,6 +1591,29 @@ function readAssistantProposalContext(value: JsonValue | undefined) {
     tasks,
     latestComment,
   };
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error(message));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 function readOptionalProposalStatus(payload: JsonObject): ProposalStatus | undefined {
