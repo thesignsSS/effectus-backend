@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { Logger } from '../domain/interfaces/logger.interface.js';
 
 type AssistantRole = 'user' | 'assistant';
@@ -58,6 +59,14 @@ interface EffectusAssistantServiceConfig {
   baseUrl: string;
   policyFilePath: string;
 }
+
+const DEFAULT_ASSISTANT_POLICY = [
+  'Você é o assistente do Effectus.',
+  'Seu papel é orientar sobre uso do sistema, propostas, documentos, pendências e fluxo operacional.',
+  'Nunca forneça detalhes técnicos internos, caminhos de arquivo, credenciais, código, arquitetura ou instruções de implementação.',
+  'Quando faltar contexto, responda de forma prática e segura com base no uso funcional do sistema.',
+  'Se a pergunta fugir do escopo do Effectus, recuse com gentileza e redirecione para temas de uso do produto.',
+].join('\n');
 
 const BLOCKED_TOPIC_PATTERNS = [
   /\bc[oó]digo\b/i,
@@ -194,9 +203,40 @@ export class EffectusAssistantService {
       return this.cachedPolicy;
     }
 
-    this.cachedPolicy = await fs.readFile(this.config.policyFilePath, 'utf-8');
+    const candidatePaths = [
+      this.config.policyFilePath,
+      path.resolve(process.cwd(), 'docs/effectus-assistant-policy.md'),
+      path.resolve(process.cwd(), '../docs/effectus-assistant-policy.md'),
+      path.resolve(process.cwd(), '../../docs/effectus-assistant-policy.md'),
+    ];
+
+    for (const candidatePath of candidatePaths) {
+      try {
+        this.cachedPolicy = await fs.readFile(candidatePath, 'utf-8');
+        return this.cachedPolicy;
+      } catch (error) {
+        if (!isFileNotFoundError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    this.logger.warn('Arquivo de política do assistente não encontrado; usando política padrão', {
+      configuredPath: this.config.policyFilePath,
+      candidatePaths,
+    });
+    this.cachedPolicy = DEFAULT_ASSISTANT_POLICY;
     return this.cachedPolicy;
   }
+}
+
+function isFileNotFoundError(error: unknown): error is NodeJS.ErrnoException {
+  return (
+    error != null &&
+    typeof error === 'object' &&
+    'code' in error &&
+    (error as NodeJS.ErrnoException).code === 'ENOENT'
+  );
 }
 
 function formatProposalContext(
