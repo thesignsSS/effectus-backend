@@ -16,6 +16,7 @@ import { SupabaseProposalStore } from './app/infra/supabase/supabase-proposal.st
 import { SupabaseNotificationStore } from './app/infra/supabase/supabase-notification.store.js';
 import { SupabaseChatStore } from './app/infra/supabase/supabase-chat.store.js';
 import { SupabaseStorageClient } from './app/infra/supabase/supabase-storage.client.js';
+import { SupabaseWhatsAppSessionStore } from './app/infra/supabase/supabase-whatsapp-session.store.js';
 import { NoopOcrProvider } from './app/infra/ocr/noop-ocr.provider.js';
 import { TesseractOcrProvider } from './app/infra/ocr/tesseract-ocr.provider.js';
 import { BrazilianDocumentDataExtractor } from './app/services/brazilian-document-data-extractor.service.js';
@@ -60,12 +61,25 @@ export function buildApp(): WhatsAppController {
     new TerminalQrCodePresenter(),
     webQrCodePresenter,
   ]);
+  const whatsAppSessionStore =
+    env.supabaseUrl && env.supabaseServiceRoleKey
+      ? new SupabaseWhatsAppSessionStore(
+          {
+            url: env.supabaseUrl,
+            serviceRoleKey: env.supabaseServiceRoleKey,
+            bucket: env.supabaseBucket,
+            path: `${env.supabaseFolder.replace(/^\/+|\/+$/g, '')}/_session/baileys-auth.json`,
+          },
+          logger,
+        )
+      : undefined;
 
   const messagingProvider = new BaileysClient(
     {
       sessionDir: env.whatsappSessionDir,
       allowedChatName: env.whatsappAllowedChatName,
       allowedChatId: env.whatsappAllowedChatId,
+      sessionStore: whatsAppSessionStore,
     },
     logger,
     qrCodePresenter,

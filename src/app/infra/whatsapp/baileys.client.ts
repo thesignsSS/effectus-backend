@@ -7,7 +7,8 @@ import makeWASocket, {
   WAMessage,
 } from '@whiskeysockets/baileys';
 import { randomUUID } from 'node:crypto';
-import { rm } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { FileExtension } from '../../domain/constants/file.constants.js';
 import { DashboardPresenter } from '../../domain/interfaces/dashboard.interface.js';
 import { Logger } from '../../domain/interfaces/logger.interface.js';
@@ -16,6 +17,7 @@ import {
   MessagingProvider,
 } from '../../domain/interfaces/messaging.interface.js';
 import { QrCodePresenter } from '../../domain/interfaces/qr-code-presenter.interface.js';
+import { WhatsAppSessionStore } from '../../domain/interfaces/whatsapp-session-store.interface.js';
 
 type MessageHandler = (message: IncomingMessage) => Promise<void>;
 type WhatsAppSocket = ReturnType<typeof makeWASocket>;
@@ -24,6 +26,7 @@ export interface BaileysClientConfig {
   sessionDir: string;
   allowedChatName: string;
   allowedChatId?: string;
+  sessionStore?: WhatsAppSessionStore;
 }
 
 export class BaileysClient implements MessagingProvider {
@@ -31,6 +34,8 @@ export class BaileysClient implements MessagingProvider {
   private socket?: WhatsAppSocket;
   private readonly groupNameCache = new Map<string, string>();
   private readonly sentMessageIds = new Set<string>();
+  private persistSessionTimeout?: NodeJS.Timeout;
+  private persistSessionPromise?: Promise<void>;
 
   constructor(
     private readonly config: BaileysClientConfig,
@@ -44,6 +49,7 @@ export class BaileysClient implements MessagingProvider {
   }
 
   async connect(): Promise<void> {
+    await this.restoreSessionFromStoreIfNeeded();
     const { state, saveCreds } = await useMultiFileAuthState(this.config.sessionDir);
     const { version } = await fetchLatestBaileysVersion();
 
@@ -57,7 +63,10 @@ export class BaileysClient implements MessagingProvider {
       syncFullHistory: false,
     });
 
-    this.socket.ev.on('creds.update', saveCreds);
+    this.socket.ev.on('creds.update', () => {
+      void saveCreds();
+      this.scheduleSessionPersistence();
+    });
 
     this.socket.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
       if (qr) {
@@ -68,6 +77,7 @@ export class BaileysClient implements MessagingProvider {
       if (connection === 'open') {
         this.dashboardPresenter?.updateConnectionStatus('connected');
         this.logger.info('WhatsApp conectado');
+        this.scheduleSessionPersistence();
         void this.logParticipatingGroups();
       }
 
@@ -171,6 +181,7 @@ export class BaileysClient implements MessagingProvider {
     this.sentMessageIds.clear();
     this.qrCodePresenter.clear();
     this.dashboardPresenter?.updateConnectionStatus('disconnected');
+    this.clearPendingSessionPersistence();
 
     await rm(this.config.sessionDir, { recursive: true, force: true }).catch((error) => {
       this.logger.warn('Falha ao limpar diretório da sessão do WhatsApp', {
@@ -179,7 +190,158 @@ export class BaileysClient implements MessagingProvider {
       });
     });
 
+    if (this.config.sessionStore) {
+      await this.config.sessionStore.clear().catch((error) => {
+        this.logger.warn('Falha ao limpar backup da sessão do WhatsApp', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+
     await this.connect();
+  }
+
+  private scheduleSessionPersistence(): void {
+    if (!this.config.sessionStore) {
+      return;
+    }
+
+    if (this.persistSessionTimeout) {
+      clearTimeout(this.persistSessionTimeout);
+    }
+
+    this.persistSessionTimeout = setTimeout(() => {
+      this.persistSessionTimeout = undefined;
+      this.persistSessionPromise = this.persistSessionToStore().finally(() => {
+        this.persistSessionPromise = undefined;
+      });
+    }, 500);
+  }
+
+  private clearPendingSessionPersistence(): void {
+    if (this.persistSessionTimeout) {
+      clearTimeout(this.persistSessionTimeout);
+      this.persistSessionTimeout = undefined;
+    }
+  }
+
+  private async restoreSessionFromStoreIfNeeded(): Promise<void> {
+    if (!this.config.sessionStore) {
+      return;
+    }
+
+    if (await this.hasLocalSessionFiles()) {
+      return;
+    }
+
+    const snapshot = await this.config.sessionStore.load();
+
+    if (!snapshot) {
+      return;
+    }
+
+    await this.restoreSessionSnapshot(snapshot);
+  }
+
+  private async persistSessionToStore(): Promise<void> {
+    if (!this.config.sessionStore) {
+      return;
+    }
+
+    try {
+      const snapshot = await this.createSessionSnapshot();
+      await this.config.sessionStore.save(snapshot);
+    } catch (error) {
+      this.logger.warn('Falha ao persistir sessão do WhatsApp no storage', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async hasLocalSessionFiles(): Promise<boolean> {
+    try {
+      const stats = await stat(this.config.sessionDir);
+
+      if (!stats.isDirectory()) {
+        return false;
+      }
+
+      const files = await readdir(this.config.sessionDir);
+      return files.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  private async createSessionSnapshot(): Promise<Buffer> {
+    await mkdir(this.config.sessionDir, { recursive: true });
+    const files = await this.collectSessionFiles(this.config.sessionDir);
+    const snapshot = {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      files,
+    };
+
+    return Buffer.from(JSON.stringify(snapshot), 'utf-8');
+  }
+
+  private async collectSessionFiles(rootDir: string, currentDir = rootDir): Promise<Array<{
+    path: string;
+    contentBase64: string;
+  }>> {
+    const entries = await readdir(currentDir, { withFileTypes: true });
+    const files: Array<{ path: string; contentBase64: string }> = [];
+
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name);
+
+      if (entry.isDirectory()) {
+        files.push(...(await this.collectSessionFiles(rootDir, fullPath)));
+        continue;
+      }
+
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const content = await readFile(fullPath);
+      files.push({
+        path: path.relative(rootDir, fullPath),
+        contentBase64: content.toString('base64'),
+      });
+    }
+
+    return files;
+  }
+
+  private async restoreSessionSnapshot(snapshotBuffer: Buffer): Promise<void> {
+    const parsed = JSON.parse(snapshotBuffer.toString('utf-8')) as {
+      version?: number;
+      files?: Array<{ path?: string; contentBase64?: string }>;
+    };
+
+    const files = Array.isArray(parsed.files) ? parsed.files : [];
+
+    if (files.length === 0) {
+      return;
+    }
+
+    await mkdir(this.config.sessionDir, { recursive: true });
+
+    for (const file of files) {
+      if (!file.path || !file.contentBase64) {
+        continue;
+      }
+
+      const destination = path.join(this.config.sessionDir, file.path);
+      await mkdir(path.dirname(destination), { recursive: true });
+      await writeFile(destination, Buffer.from(file.contentBase64, 'base64'));
+    }
+
+    this.logger.info('Sessão do WhatsApp restaurada no disco local a partir do storage', {
+      sessionDir: this.config.sessionDir,
+      filesRestored: files.length,
+    });
   }
 
   private async toIncomingMessage(message: WAMessage): Promise<IncomingMessage | null> {
