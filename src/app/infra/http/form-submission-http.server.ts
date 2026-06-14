@@ -11,6 +11,7 @@ import {
   PROPOSAL_STATUS_OPTIONS,
   ProposalStatus,
   ProposalStore,
+  ProposalUpdateEffects,
 } from '../../domain/interfaces/proposal-store.interface.js';
 import { OneDriveService } from '../../services/onedrive.service.js';
 import { ChatService } from '../../services/chat.service.js';
@@ -960,7 +961,37 @@ export class FormSubmissionHttpServer {
 
       const effects = result?.effects;
 
-      if (effects?.statusChangedTo && effects.actorRole === 'admin') {
+      this.sendJson(response, 200, {
+        ok: true,
+        proposalId,
+        ...(result
+          ? {
+              status: result.status,
+              statusLabel: result.statusLabel,
+            }
+          : {}),
+      });
+
+      if (effects) {
+        void this.runProposalUpdateEffects(effects, result?.statusLabel);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao atualizar proposta', {
+        error: message,
+        proposalId,
+        brokerUserId,
+      });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
+    }
+  }
+
+  private async runProposalUpdateEffects(
+    effects: ProposalUpdateEffects,
+    statusLabel?: string,
+  ): Promise<void> {
+    try {
+      if (effects.statusChangedTo && effects.actorRole === 'admin') {
         await this.notificationService.notifyBrokerAboutStatusChanged({
           proposalId: effects.proposalId,
           proposalCode: effects.proposalCode,
@@ -983,7 +1014,7 @@ export class FormSubmissionHttpServer {
               [
                 'Sua proposta teve o status atualizado.',
                 `Proposta: ${effects.proposalCode}`,
-                `Novo status: ${result?.statusLabel ?? effects.statusChangedTo}`,
+                `Novo status: ${statusLabel ?? effects.statusChangedTo}`,
                 effects.pendingReason ? `Motivo da pendência: ${effects.pendingReason}` : undefined,
                 effects.adminComment ? `Comentário do admin: ${effects.adminComment}` : undefined,
               ]
@@ -1010,7 +1041,7 @@ export class FormSubmissionHttpServer {
         }
       }
 
-      if (effects?.commentAdded) {
+      if (effects.commentAdded) {
         await this.notificationService.notifyAdminsAboutComment({
           proposalId: effects.proposalId,
           proposalCode: effects.proposalCode,
@@ -1019,7 +1050,7 @@ export class FormSubmissionHttpServer {
         });
       }
 
-      if (effects?.resubmittedForAnalysis) {
+      if (effects.resubmittedForAnalysis) {
         await this.notificationService.notifyAdminsAboutResubmission({
           proposalId: effects.proposalId,
           proposalCode: effects.proposalCode,
@@ -1027,25 +1058,13 @@ export class FormSubmissionHttpServer {
           excludeUserId: effects.actorUserId,
         });
       }
-
-      this.sendJson(response, 200, {
-        ok: true,
-        proposalId,
-        ...(result
-          ? {
-              status: result.status,
-              statusLabel: result.statusLabel,
-            }
-          : {}),
-      });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error('Falha ao atualizar proposta', {
-        error: message,
-        proposalId,
-        brokerUserId,
+      this.logger.error('Falha ao executar efeitos pós-atualização da proposta', {
+        proposalId: effects.proposalId,
+        proposalCode: effects.proposalCode,
+        brokerUserId: effects.brokerUserId,
+        error: error instanceof Error ? error.message : String(error),
       });
-      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
     }
   }
 
