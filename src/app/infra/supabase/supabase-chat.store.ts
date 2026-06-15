@@ -61,12 +61,24 @@ export class SupabaseChatStore implements ChatStore {
   }
 
   async listDirectoryUsers(excludeUserId: string): Promise<ChatDirectoryUser[]> {
-    const { data, error } = await this.client
+    const requester = await this.getDirectoryUserById(excludeUserId);
+
+    if (!requester) {
+      throw new Error('Usuário do chat não encontrado.');
+    }
+
+    let query = this.client
       .from('profiles')
       .select('id, full_name, role')
       .eq('is_active', true)
       .neq('id', excludeUserId)
       .order('full_name', { ascending: true });
+
+    if (!requester.isAdmin) {
+      query = query.eq('role', 'admin');
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw new Error(`Supabase chat users list failed: ${error.message}`);
@@ -91,6 +103,8 @@ export class SupabaseChatStore implements ChatStore {
     userId: string,
     otherUserId: string,
   ): Promise<ChatConversationSummary> {
+    await this.assertUsersCanInteract(userId, otherUserId);
+
     const conversation = await this.upsertDirectConversation(userId, otherUserId);
     const profiles = await this.getProfilesByIds([userId, otherUserId]);
     const counterpart = profiles.get(otherUserId);
@@ -113,6 +127,12 @@ export class SupabaseChatStore implements ChatStore {
     const participant = await this.requireParticipant(userId, conversationId);
 
     if (!participant) {
+      throw new Error('Conversa não encontrada.');
+    }
+
+    const conversation = await this.getConversationById(userId, conversationId);
+
+    if (!conversation) {
       throw new Error('Conversa não encontrada.');
     }
 
@@ -150,6 +170,8 @@ export class SupabaseChatStore implements ChatStore {
     if (!content) {
       throw new Error('A mensagem não pode estar vazia.');
     }
+
+    await this.assertUsersCanInteract(input.senderUserId, input.recipientUserId);
 
     const conversation = await this.upsertDirectConversation(
       input.senderUserId,
@@ -262,6 +284,12 @@ export class SupabaseChatStore implements ChatStore {
     userId: string,
     onlyConversationIds?: string[],
   ): Promise<ChatConversationSummary[]> {
+    const requester = await this.getDirectoryUserById(userId);
+
+    if (!requester) {
+      throw new Error('Usuário do chat não encontrado.');
+    }
+
     let query = this.client
       .from('chat_conversation_participants')
       .select(
@@ -314,7 +342,7 @@ export class SupabaseChatStore implements ChatStore {
             : conversation.direct_user_a;
         const counterpart = profiles.get(counterpartId);
 
-        if (!counterpart) {
+        if (!counterpart || !this.canUsersInteract(requester, counterpart)) {
           return null;
         }
 
@@ -350,6 +378,29 @@ export class SupabaseChatStore implements ChatStore {
       const bTime = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0;
       return bTime - aTime;
     });
+  }
+
+  private async getDirectoryUserById(userId: string): Promise<ChatDirectoryUser | null> {
+    const profiles = await this.getProfilesByIds([userId]);
+    return profiles.get(userId) ?? null;
+  }
+
+  private async assertUsersCanInteract(userId: string, otherUserId: string): Promise<void> {
+    const profiles = await this.getProfilesByIds([userId, otherUserId]);
+    const user = profiles.get(userId);
+    const otherUser = profiles.get(otherUserId);
+
+    if (!user || !otherUser) {
+      throw new Error('Usuário do chat não encontrado.');
+    }
+
+    if (!this.canUsersInteract(user, otherUser)) {
+      throw new Error('Você não tem permissão para conversar com este usuário.');
+    }
+  }
+
+  private canUsersInteract(user: ChatDirectoryUser, otherUser: ChatDirectoryUser): boolean {
+    return user.isAdmin || otherUser.isAdmin;
   }
 
   private async getProfilesByIds(userIds: string[]): Promise<Map<string, ChatDirectoryUser>> {
