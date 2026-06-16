@@ -1125,6 +1125,7 @@ export class FormSubmissionHttpServer {
           contentType: getContentTypeByFilename(filename),
           sizeBytes: buffer.length,
           uploadedAt: createdAt.toISOString(),
+          uploadedByUserId: brokerUserId,
         });
       }
 

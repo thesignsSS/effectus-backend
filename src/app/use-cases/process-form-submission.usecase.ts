@@ -48,6 +48,10 @@ export class ProcessFormSubmissionUseCase {
   ) {}
 
   async execute(input: FormSubmissionInput): Promise<FormSubmissionResult> {
+    if (input.documents.length === 0) {
+      throw new Error('Anexe pelo menos um documento para enviar a proposta');
+    }
+
     const createdAt = new Date();
     const uploadOptions = {
       brokerName: input.brokerName,
@@ -215,14 +219,7 @@ export class ProcessFormSubmissionUseCase {
 
   private async saveProposalIfPossible(
     input: FormSubmissionInput,
-    documents: Array<{
-      filename: string;
-      originalFilename: string;
-      storageLocation: string;
-      contentType: string;
-      sizeBytes: number;
-      uploadedAt: string;
-    }>,
+    documents: ProposalDocumentInput[],
   ): Promise<({ id: string; proposalCode: string } & ProposalStatusInfo) | undefined> {
     if (!input.brokerUserId) {
       this.logger.warn('Proposta nao foi persistida: brokerUserId ausente', {

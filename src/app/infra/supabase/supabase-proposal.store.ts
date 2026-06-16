@@ -31,6 +31,7 @@ type UserRole = 'admin' | 'broker';
 type ProposalRow = {
   id: string;
   proposal_number: number;
+  broker_user_id: string;
   status: ProposalStatus | null;
   broker_name: string | null;
   broker_phone: string | null;
@@ -56,6 +57,7 @@ type ProposalDocumentRow = {
   content_type: string;
   size_bytes: number;
   uploaded_at: string;
+  uploaded_by_user_id: string | null;
 };
 
 export class SupabaseProposalStore implements ProposalStore {
@@ -111,6 +113,7 @@ export class SupabaseProposalStore implements ProposalStore {
           content_type: document.contentType,
           size_bytes: document.sizeBytes,
           uploaded_at: document.uploadedAt,
+          uploaded_by_user_id: document.uploadedByUserId ?? input.brokerUserId,
         })),
       );
 
@@ -385,6 +388,7 @@ export class SupabaseProposalStore implements ProposalStore {
       .select(`
         id,
         proposal_number,
+        broker_user_id,
         status,
         broker_name,
         broker_phone,
@@ -407,7 +411,8 @@ export class SupabaseProposalStore implements ProposalStore {
           storage_location,
           content_type,
           size_bytes,
-          uploaded_at
+          uploaded_at,
+          uploaded_by_user_id
         )
       `)
       .eq('id', input.proposalId);
@@ -447,6 +452,7 @@ export class SupabaseProposalStore implements ProposalStore {
         content_type,
         size_bytes,
         uploaded_at,
+        uploaded_by_user_id,
         proposals!inner (
           id,
           broker_user_id
@@ -585,6 +591,7 @@ export class SupabaseProposalStore implements ProposalStore {
         content_type: document.contentType,
         size_bytes: document.sizeBytes,
         uploaded_at: document.uploadedAt,
+        uploaded_by_user_id: document.uploadedByUserId ?? input.brokerUserId,
       })),
     );
 
@@ -644,10 +651,18 @@ export class SupabaseProposalStore implements ProposalStore {
     };
   }
 
-  private toProposalDetail(
+  private async toProposalDetail(
     row: ProposalRow & { proposal_documents?: ProposalDocumentRow[] | null },
-  ): ProposalDetail {
+  ): Promise<ProposalDetail> {
     const status = toStatusInfo(row.status);
+    const documents = row.proposal_documents ?? [];
+    const uploaderNames = await this.getProfileNamesByIds(
+      Array.from(
+        new Set(
+          documents.map((document) => document.uploaded_by_user_id ?? row.broker_user_id),
+        ),
+      ),
+    );
 
     return {
       id: row.id,
@@ -671,16 +686,27 @@ export class SupabaseProposalStore implements ProposalStore {
       additionalInfo: row.additional_info ?? '',
       formData: row.form_data ?? {},
       comments: normalizeProposalComments(row.proposal_comments),
-      documents: (row.proposal_documents ?? []).map((document) => ({
-        id: document.id,
-        filename: document.filename,
-        originalFilename: document.original_filename,
-        displayName: document.original_filename,
-        contentType: document.content_type,
-        sizeBytes: document.size_bytes,
-        uploadedAt: document.uploaded_at,
-        storageLocation: document.storage_location,
-      })),
+      documents: documents.map((document) => {
+        const uploadedByUserId = document.uploaded_by_user_id ?? row.broker_user_id;
+        const isUploadedByProposalOwner = uploadedByUserId === row.broker_user_id;
+        const uploadedByName =
+          uploaderNames.get(uploadedByUserId)?.trim() ||
+          (isUploadedByProposalOwner ? row.broker_name ?? 'Corretor' : 'Usuário');
+
+        return {
+          id: document.id,
+          filename: document.filename,
+          originalFilename: document.original_filename,
+          displayName: document.original_filename,
+          contentType: document.content_type,
+          sizeBytes: document.size_bytes,
+          uploadedAt: document.uploaded_at,
+          uploadedByUserId,
+          uploadedByName,
+          isUploadedByProposalOwner,
+          storageLocation: document.storage_location,
+        };
+      }),
     };
   }
 
@@ -694,6 +720,29 @@ export class SupabaseProposalStore implements ProposalStore {
       sizeBytes: row.size_bytes,
       uploadedAt: row.uploaded_at,
     };
+  }
+
+  private async getProfileNamesByIds(userIds: string[]): Promise<Map<string, string>> {
+    const uniqueUserIds = Array.from(new Set(userIds.filter(Boolean)));
+
+    if (uniqueUserIds.length === 0) {
+      return new Map();
+    }
+
+    const { data, error } = await this.client
+      .from('profiles')
+      .select('id, full_name')
+      .in('id', uniqueUserIds);
+
+    if (error) {
+      throw new Error(`Supabase uploader profiles get failed: ${error.message}`);
+    }
+
+    return new Map(
+      ((data as Array<{ id: string; full_name: string | null }> | null) ?? []).map(
+        (profile) => [profile.id, profile.full_name ?? ''],
+      ),
+    );
   }
 
   private async resolveAccess(userId: string): Promise<{ isAdmin: boolean; role: UserRole; fullName: string }> {

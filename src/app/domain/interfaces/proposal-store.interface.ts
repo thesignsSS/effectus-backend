@@ -5,6 +5,7 @@ export interface ProposalDocumentInput {
   contentType: string;
   sizeBytes: number;
   uploadedAt: string;
+  uploadedByUserId?: string;
 }
 
 export type ProposalCommentType = 'comment' | 'pending_reason' | 'resubmission';
@@ -95,6 +96,9 @@ export interface ProposalDocument {
   contentType: string;
   sizeBytes: number;
   uploadedAt: string;
+  uploadedByUserId: string | null;
+  uploadedByName: string;
+  isUploadedByProposalOwner: boolean;
   storageLocation: string;
 }
 
