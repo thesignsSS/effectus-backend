@@ -12,6 +12,8 @@ import {
   ProposalDocumentContext,
   ProposalDocumentLookup,
   ProposalGuest,
+  ProposalInvitation,
+  ProposalInvitationStatus,
   ProposalListItem,
   ProposalListResult,
   ProposalShareLink,
@@ -76,6 +78,16 @@ type ProposalShareLinkRow = {
   created_by_user_id: string;
   created_at: string;
   revoked_at: string | null;
+};
+
+type ProposalInvitationRow = {
+  id: string;
+  proposal_id: string;
+  inviter_user_id: string;
+  invitee_user_id: string;
+  status: ProposalInvitationStatus;
+  created_at: string;
+  responded_at: string | null;
 };
 
 type ResolvedProposalAccess = {
@@ -781,6 +793,149 @@ export class SupabaseProposalStore implements ProposalStore {
     };
   }
 
+  async createInvitation(input: {
+    brokerUserId: string;
+    proposalId: string;
+    inviteeUserId: string;
+  }): Promise<ProposalInvitation> {
+    const access = await this.resolveAccess(input.brokerUserId);
+    const proposalAccess = await this.resolveProposalAccess(input.proposalId, input.brokerUserId);
+
+    if (!proposalAccess || (!access.isAdmin && !proposalAccess.isOwner)) {
+      throw new Error('Proposta não encontrada');
+    }
+
+    if (proposalAccess.ownerBrokerUserId === input.inviteeUserId) {
+      throw new Error('O dono da proposta não pode ser convidado');
+    }
+
+    if (await this.hasProposalCollaborator(input.proposalId, input.inviteeUserId)) {
+      throw new Error('Este usuário já está vinculado à proposta');
+    }
+
+    const inviteeProfile = await this.resolveAccess(input.inviteeUserId);
+    if (!inviteeProfile.fullName && !inviteeProfile.isAdmin && inviteeProfile.role === 'broker') {
+      throw new Error('Usuário convidado não encontrado');
+    }
+
+    const { data, error } = await this.client
+      .from('proposal_invitations')
+      .upsert(
+        {
+          proposal_id: input.proposalId,
+          inviter_user_id: input.brokerUserId,
+          invitee_user_id: input.inviteeUserId,
+          status: 'pending',
+          responded_at: null,
+        },
+        { onConflict: 'proposal_id,invitee_user_id' },
+      )
+      .select('id, proposal_id, inviter_user_id, invitee_user_id, status, created_at, responded_at')
+      .single();
+
+    if (error || !data) {
+      throw new Error(`Supabase proposal invitation create failed: ${error?.message ?? 'unknown error'}`);
+    }
+
+    return this.toProposalInvitation(data as ProposalInvitationRow);
+  }
+
+  async listInvitationsByInvitee(input: {
+    brokerUserId: string;
+  }): Promise<ProposalInvitation[]> {
+    const { data, error } = await this.client
+      .from('proposal_invitations')
+      .select('id, proposal_id, inviter_user_id, invitee_user_id, status, created_at, responded_at')
+      .eq('invitee_user_id', input.brokerUserId)
+      .in('status', ['pending', 'accepted'])
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      throw new Error(`Supabase proposal invitations list failed: ${error.message}`);
+    }
+
+    return this.toProposalInvitations((data as ProposalInvitationRow[] | null) ?? []);
+  }
+
+  async countPendingInvitations(input: {
+    brokerUserId: string;
+  }): Promise<number> {
+    const { count, error } = await this.client
+      .from('proposal_invitations')
+      .select('id', { count: 'exact', head: true })
+      .eq('invitee_user_id', input.brokerUserId)
+      .eq('status', 'pending');
+
+    if (error) {
+      throw new Error(`Supabase proposal invitations pending count failed: ${error.message}`);
+    }
+
+    return count ?? 0;
+  }
+
+  async respondToInvitation(input: {
+    brokerUserId: string;
+    invitationId: string;
+    action: 'accept' | 'reject';
+  }): Promise<ProposalInvitation | null> {
+    const { data, error } = await this.client
+      .from('proposal_invitations')
+      .select('id, proposal_id, inviter_user_id, invitee_user_id, status, created_at, responded_at')
+      .eq('id', input.invitationId)
+      .eq('invitee_user_id', input.brokerUserId)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return null;
+      }
+
+      throw new Error(`Supabase proposal invitation get failed: ${error.message}`);
+    }
+
+    const invitation = data as ProposalInvitationRow;
+
+    if (invitation.status !== 'pending') {
+      return this.toProposalInvitation(invitation);
+    }
+
+    const nextStatus: ProposalInvitationStatus =
+      input.action === 'accept' ? 'accepted' : 'rejected';
+
+    const { data: updatedInvitation, error: updateError } = await this.client
+      .from('proposal_invitations')
+      .update({
+        status: nextStatus,
+        responded_at: new Date().toISOString(),
+      })
+      .eq('id', input.invitationId)
+      .eq('invitee_user_id', input.brokerUserId)
+      .select('id, proposal_id, inviter_user_id, invitee_user_id, status, created_at, responded_at')
+      .single();
+
+    if (updateError || !updatedInvitation) {
+      throw new Error(`Supabase proposal invitation update failed: ${updateError?.message ?? 'unknown error'}`);
+    }
+
+    if (input.action === 'accept') {
+      const { error: collaboratorError } = await this.client
+        .from('proposal_collaborators')
+        .upsert(
+          {
+            proposal_id: invitation.proposal_id,
+            user_id: input.brokerUserId,
+          },
+          { onConflict: 'proposal_id,user_id', ignoreDuplicates: true },
+        );
+
+      if (collaboratorError) {
+        throw new Error(`Supabase invitation collaborator create failed: ${collaboratorError.message}`);
+      }
+    }
+
+    return this.toProposalInvitation(updatedInvitation as ProposalInvitationRow);
+  }
+
   async getShareLinkPreview(input: {
     brokerUserId: string;
     token: string;
@@ -986,6 +1141,9 @@ export class SupabaseProposalStore implements ProposalStore {
       shareLinkToken: proposalAccess.isOwner || proposalAccess.isAdmin
         ? (await this.getShareLinkByProposalId(row.id))?.token ?? null
         : null,
+      pendingInvitations: proposalAccess.isOwner || proposalAccess.isAdmin
+        ? await this.listProposalInvitationsByProposal(row.id, 'pending')
+        : [],
     };
   }
 
@@ -1057,6 +1215,108 @@ export class SupabaseProposalStore implements ProposalStore {
     }
   }
 
+  private async toProposalInvitations(
+    rows: ProposalInvitationRow[],
+  ): Promise<ProposalInvitation[]> {
+    if (rows.length === 0) {
+      return [];
+    }
+
+    const proposalIds = Array.from(new Set(rows.map((row) => row.proposal_id)));
+    const userIds = Array.from(
+      new Set(rows.flatMap((row) => [row.inviter_user_id, row.invitee_user_id])),
+    );
+    const [proposals, names] = await Promise.all([
+      this.getProposalSummariesByIds(proposalIds),
+      this.getProfileNamesByIds(userIds),
+    ]);
+
+    return rows.flatMap((row) => {
+      const proposal = proposals.get(row.proposal_id);
+
+      if (!proposal) {
+        return [];
+      }
+
+      return [this.mapProposalInvitation(row, proposal, names)];
+    });
+  }
+
+  private async toProposalInvitation(
+    row: ProposalInvitationRow,
+  ): Promise<ProposalInvitation> {
+    const [proposalMap, names] = await Promise.all([
+      this.getProposalSummariesByIds([row.proposal_id]),
+      this.getProfileNamesByIds([row.inviter_user_id, row.invitee_user_id]),
+    ]);
+    const proposal = proposalMap.get(row.proposal_id);
+
+    if (!proposal) {
+      throw new Error('Proposta não encontrada');
+    }
+
+    return this.mapProposalInvitation(row, proposal, names);
+  }
+
+  private mapProposalInvitation(
+    row: ProposalInvitationRow,
+    proposal: {
+      id: string;
+      proposal_number: number;
+      broker_user_id: string;
+      broker_name: string | null;
+      client_name: string | null;
+    },
+    names: Map<string, string>,
+  ): ProposalInvitation {
+    return {
+      id: row.id,
+      proposalId: row.proposal_id,
+      proposalCode: formatProposalCode(proposal.proposal_number),
+      clientName: proposal.client_name ?? '',
+      inviterUserId: row.inviter_user_id,
+      inviterName: names.get(row.inviter_user_id)?.trim() || 'Usuário',
+      ownerBrokerUserId: proposal.broker_user_id,
+      ownerName: proposal.broker_name ?? 'Corretor',
+      inviteeUserId: row.invitee_user_id,
+      inviteeName: names.get(row.invitee_user_id)?.trim() || 'Usuário',
+      status: row.status,
+      createdAt: row.created_at,
+      respondedAt: row.responded_at,
+    };
+  }
+
+  private async getProposalSummariesByIds(proposalIds: string[]) {
+    if (proposalIds.length === 0) {
+      return new Map<string, {
+        id: string;
+        proposal_number: number;
+        broker_user_id: string;
+        broker_name: string | null;
+        client_name: string | null;
+      }>();
+    }
+
+    const { data, error } = await this.client
+      .from('proposals')
+      .select('id, proposal_number, broker_user_id, broker_name, client_name')
+      .in('id', proposalIds);
+
+    if (error) {
+      throw new Error(`Supabase proposal summaries get failed: ${error.message}`);
+    }
+
+    return new Map(
+      ((data as Array<{
+        id: string;
+        proposal_number: number;
+        broker_user_id: string;
+        broker_name: string | null;
+        client_name: string | null;
+      }> | null) ?? []).map((proposal) => [proposal.id, proposal]),
+    );
+  }
+
   private async listProposalGuests(proposalId: string): Promise<ProposalGuest[]> {
     const { data, error } = await this.client
       .from('proposal_collaborators')
@@ -1076,6 +1336,29 @@ export class SupabaseProposalStore implements ProposalStore {
       name: names.get(collaborator.user_id)?.trim() || 'Usuário',
       joinedAt: collaborator.created_at,
     }));
+  }
+
+  private async listProposalInvitationsByProposal(
+    proposalId: string,
+    status?: ProposalInvitationStatus,
+  ): Promise<ProposalInvitation[]> {
+    let query = this.client
+      .from('proposal_invitations')
+      .select('id, proposal_id, inviter_user_id, invitee_user_id, status, created_at, responded_at')
+      .eq('proposal_id', proposalId)
+      .order('created_at', { ascending: false });
+
+    if (status) {
+      query = query.eq('status', status);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      throw new Error(`Supabase proposal invitations by proposal failed: ${error.message}`);
+    }
+
+    return this.toProposalInvitations((data as ProposalInvitationRow[] | null) ?? []);
   }
 
   private async listSharedProposalIds(userId: string): Promise<string[]> {

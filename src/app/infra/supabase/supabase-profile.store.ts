@@ -53,4 +53,44 @@ export class SupabaseProfileStore implements ProfileStore {
       isActive: data.is_active !== false,
     };
   }
+
+  async searchByName(input: {
+    query: string;
+    excludeUserId?: string;
+    limit?: number;
+  }): Promise<UserProfile[]> {
+    let query = this.client
+      .from('profiles')
+      .select('id, full_name, role, is_active')
+      .eq('is_active', true)
+      .ilike('full_name', `%${input.query.replace(/[,%]/g, '')}%`)
+      .limit(Math.min(20, Math.max(1, input.limit ?? 10)));
+
+    if (input.excludeUserId) {
+      query = query.neq('id', input.excludeUserId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      throw new Error(`Supabase profile search failed: ${error.message}`);
+    }
+
+    return ((data as Array<{
+      id: string;
+      full_name: string | null;
+      role: string | null;
+      is_active: boolean | null;
+    }> | null) ?? []).map((item) => {
+      const role = (item.role === 'admin' ? 'admin' : 'broker') as UserRole;
+
+      return {
+        id: item.id,
+        fullName: item.full_name ?? '',
+        role,
+        isAdmin: role === 'admin',
+        isActive: item.is_active !== false,
+      };
+    });
+  }
 }

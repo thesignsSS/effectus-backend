@@ -121,6 +121,25 @@ export class NotificationService {
     return notifications[0] ?? null;
   }
 
+  async notifyUserAboutProposalInvitation(input: {
+    userId: string;
+    proposalId: string;
+    proposalCode: string;
+    inviterName: string;
+  }): Promise<NotificationItem | null> {
+    const notifications = await this.store.createMany([
+      {
+        userId: input.userId,
+        proposalId: input.proposalId,
+        type: 'proposal_invitation_received',
+        title: 'Novo convite de proposta',
+        message: `${input.inviterName} convidou você para a proposta ${input.proposalCode}.`,
+      },
+    ]);
+
+    return notifications[0] ?? null;
+  }
+
   async listByUser(userId: string) {
     return this.store.listByUser(userId);
   }

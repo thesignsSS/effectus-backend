@@ -109,8 +109,31 @@ export class FormSubmissionHttpServer {
       return;
     }
 
+    if (request.method === 'GET' && requestUrl.pathname === '/api/profiles/search') {
+      await this.handleSearchProfiles(requestUrl, response);
+      return;
+    }
+
     if (request.method === 'GET' && requestUrl.pathname === '/api/notifications') {
       await this.handleListNotifications(requestUrl, response);
+      return;
+    }
+
+    if (request.method === 'GET' && requestUrl.pathname === '/api/invitations') {
+      await this.handleListInvitations(requestUrl, response);
+      return;
+    }
+
+    if (request.method === 'GET' && requestUrl.pathname === '/api/invitations/pending-summary') {
+      await this.handlePendingInvitationsSummary(requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'PATCH' &&
+      requestUrl.pathname.match(/^\/api\/invitations\/[^/]+$/)
+    ) {
+      await this.handleRespondInvitation(request, requestUrl, response);
       return;
     }
 
@@ -227,6 +250,14 @@ export class FormSubmissionHttpServer {
       requestUrl.pathname.match(/^\/api\/proposals\/[^/]+\/share-link$/)
     ) {
       await this.handleCreateProposalShareLink(request, requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'POST' &&
+      requestUrl.pathname.match(/^\/api\/proposals\/[^/]+\/invitations$/)
+    ) {
+      await this.handleCreateProposalInvitation(request, requestUrl, response);
       return;
     }
 
@@ -383,6 +414,52 @@ export class FormSubmissionHttpServer {
       this.logger.error('Falha ao buscar perfil atual', {
         error: message,
         userId,
+      });
+      this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handleSearchProfiles(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const userId = requestUrl.searchParams.get('userId')?.trim();
+    const query = requestUrl.searchParams.get('query')?.trim() ?? '';
+
+    if (!userId) {
+      this.sendJson(response, 400, {
+        ok: false,
+        error: 'Campo obrigatório ausente: userId',
+      });
+      return;
+    }
+
+    if (query.length < 5) {
+      this.sendJson(response, 200, { items: [] });
+      return;
+    }
+
+    try {
+      const profiles = await this.profileStore.searchByName({
+        query,
+        excludeUserId: userId,
+        limit: 10,
+      });
+
+      this.sendJson(response, 200, {
+        items: profiles.map((profile) => ({
+          id: profile.id,
+          fullName: profile.fullName,
+          role: profile.role,
+          isAdmin: profile.isAdmin,
+        })),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao buscar perfis por nome', {
+        error: message,
+        userId,
+        query,
       });
       this.sendJson(response, 500, { ok: false, error: message });
     }
@@ -564,6 +641,111 @@ export class FormSubmissionHttpServer {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error('Falha ao listar notificações', { error: message, userId });
       this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handleListInvitations(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const brokerUserId = readRequiredSearchParam(requestUrl, 'userId');
+
+    try {
+      const items = await this.proposalStore.listInvitationsByInvitee({
+        brokerUserId,
+      });
+      this.sendJson(response, 200, { items });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao listar convites de proposta', {
+        error: message,
+        brokerUserId,
+      });
+      this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handlePendingInvitationsSummary(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const brokerUserId =
+      requestUrl.searchParams.get('brokerUserId')?.trim() ??
+      requestUrl.searchParams.get('userId')?.trim();
+
+    if (!brokerUserId) {
+      this.sendJson(response, 400, {
+        ok: false,
+        error: 'Campo obrigatório ausente: brokerUserId',
+      });
+      return;
+    }
+
+    try {
+      const pendingCount = await this.proposalStore.countPendingInvitations({
+        brokerUserId,
+      });
+
+      this.sendJson(response, 200, {
+        pendingCount,
+        hasPending: pendingCount > 0,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao consultar resumo de convites pendentes', {
+        error: message,
+        brokerUserId,
+      });
+      this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handleRespondInvitation(
+    request: IncomingMessage,
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const payload = await this.readJsonBody(request);
+    const brokerUserId = readRequiredString(payload, 'userId', 'brokerUserId');
+    const invitationId = getRequiredPathSegment(requestUrl.pathname, 2, 'invitationId');
+    const actionValue = readRequiredString(payload, 'action', 'acao');
+
+    if (actionValue !== 'accept' && actionValue !== 'reject') {
+      this.sendJson(response, 400, { ok: false, error: 'Ação de convite inválida' });
+      return;
+    }
+
+    try {
+      const invitation = await this.proposalStore.respondToInvitation({
+        brokerUserId,
+        invitationId,
+        action: actionValue,
+      });
+
+      if (!invitation) {
+        this.sendJson(response, 404, { ok: false, error: 'Convite não encontrado' });
+        return;
+      }
+
+      this.sendJson(response, 200, { ok: true, item: invitation });
+
+      if (actionValue === 'accept') {
+        const inviteeProfile = await this.profileStore.getById(brokerUserId);
+        void this.notificationService.notifyProposalOwnerAboutNewCollaborator({
+          ownerUserId: invitation.ownerBrokerUserId,
+          proposalId: invitation.proposalId,
+          proposalCode: invitation.proposalCode,
+          guestName: inviteeProfile?.fullName?.trim() || 'Usuário convidado',
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao responder convite de proposta', {
+        error: message,
+        brokerUserId,
+        invitationId,
+      });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
     }
   }
 
@@ -1069,6 +1251,43 @@ export class FormSubmissionHttpServer {
       this.logger.error('Falha ao criar link de compartilhamento da proposta', {
         error: message,
         brokerUserId,
+        proposalId,
+      });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
+    }
+  }
+
+  private async handleCreateProposalInvitation(
+    request: IncomingMessage,
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const payload = await this.readJsonBody(request);
+    const brokerUserId = readRequiredString(payload, 'brokerUserId', 'corretorUserId');
+    const inviteeUserId = readRequiredString(payload, 'inviteeUserId', 'convidadoUserId');
+    const proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
+
+    try {
+      const invitation = await this.proposalStore.createInvitation({
+        brokerUserId,
+        proposalId,
+        inviteeUserId,
+      });
+
+      this.sendJson(response, 201, { ok: true, item: invitation });
+
+      void this.notificationService.notifyUserAboutProposalInvitation({
+        userId: invitation.inviteeUserId,
+        proposalId: invitation.proposalId,
+        proposalCode: invitation.proposalCode,
+        inviterName: invitation.inviterName,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao criar convite de proposta', {
+        error: message,
+        brokerUserId,
+        inviteeUserId,
         proposalId,
       });
       this.sendJson(response, this.statusFromError(message), { ok: false, error: message });

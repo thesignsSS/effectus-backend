@@ -174,6 +174,24 @@ export interface ProposalGuest {
   joinedAt: string;
 }
 
+export type ProposalInvitationStatus = 'pending' | 'accepted' | 'rejected';
+
+export interface ProposalInvitation {
+  id: string;
+  proposalId: string;
+  proposalCode: string;
+  clientName: string;
+  inviterUserId: string;
+  inviterName: string;
+  ownerBrokerUserId: string;
+  ownerName: string;
+  inviteeUserId: string;
+  inviteeName: string;
+  status: ProposalInvitationStatus;
+  createdAt: string;
+  respondedAt: string | null;
+}
+
 export interface ProposalShareLink {
   token: string;
   createdAt: string;
@@ -229,6 +247,7 @@ export interface ProposalDetail {
   documents: ProposalDocument[];
   guests: ProposalGuest[];
   shareLinkToken: string | null;
+  pendingInvitations: ProposalInvitation[];
 }
 
 export interface ProposalListResult {
@@ -279,6 +298,22 @@ export interface ProposalStore {
     brokerUserId: string;
     proposalId: string;
   }): Promise<ProposalShareLink>;
+  createInvitation(input: {
+    brokerUserId: string;
+    proposalId: string;
+    inviteeUserId: string;
+  }): Promise<ProposalInvitation>;
+  listInvitationsByInvitee(input: {
+    brokerUserId: string;
+  }): Promise<ProposalInvitation[]>;
+  countPendingInvitations(input: {
+    brokerUserId: string;
+  }): Promise<number>;
+  respondToInvitation(input: {
+    brokerUserId: string;
+    invitationId: string;
+    action: 'accept' | 'reject';
+  }): Promise<ProposalInvitation | null>;
   getShareLinkPreview(input: {
     brokerUserId: string;
     token: string;

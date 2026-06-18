@@ -10,4 +10,9 @@ export interface UserProfile {
 
 export interface ProfileStore {
   getById(userId: string): Promise<UserProfile | null>;
+  searchByName(input: {
+    query: string;
+    excludeUserId?: string;
+    limit?: number;
+  }): Promise<UserProfile[]>;
 }
