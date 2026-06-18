@@ -8,7 +8,11 @@ export interface ProposalDocumentInput {
   uploadedByUserId?: string;
 }
 
-export type ProposalCommentType = 'comment' | 'pending_reason' | 'resubmission';
+export type ProposalCommentType =
+  | 'comment'
+  | 'pending_reason'
+  | 'resubmission'
+  | 'audit';
 
 export interface ProposalComment {
   id: string;
@@ -81,6 +85,10 @@ export interface ProposalListItem {
   proposalCode: string;
   status: ProposalStatus;
   statusLabel: string;
+  ownerBrokerUserId: string;
+  ownerName: string;
+  isOwnedByCurrentUser: boolean;
+  isSharedWithCurrentUser: boolean;
   clientName: string;
   brokerName: string;
   propertyType: string;
@@ -160,11 +168,46 @@ export interface DeleteProposalResult {
   documentLocations: string[];
 }
 
+export interface ProposalGuest {
+  userId: string;
+  name: string;
+  joinedAt: string;
+}
+
+export interface ProposalShareLink {
+  token: string;
+  createdAt: string;
+}
+
+export interface ProposalSharePreview {
+  proposalId: string;
+  proposalCode: string;
+  clientName: string;
+  ownerBrokerUserId: string;
+  ownerName: string;
+  isOwnedByCurrentUser: boolean;
+  isAlreadyAttached: boolean;
+}
+
+export interface AcceptProposalShareLinkResult {
+  proposalId: string;
+  proposalCode: string;
+  ownerBrokerUserId: string;
+  ownerName: string;
+  guestName: string;
+  alreadyAttached: boolean;
+}
+
 export interface ProposalDetail {
   id: string;
   proposalCode: string;
   status: ProposalStatus;
   statusLabel: string;
+  ownerBrokerUserId: string;
+  ownerName: string;
+  isOwnedByCurrentUser: boolean;
+  isSharedWithCurrentUser: boolean;
+  canDeleteProposal: boolean;
   brokerName: string;
   brokerPhone: string;
   createdAt: string;
@@ -184,6 +227,8 @@ export interface ProposalDetail {
   formData: Record<string, unknown>;
   comments: ProposalComment[];
   documents: ProposalDocument[];
+  guests: ProposalGuest[];
+  shareLinkToken: string | null;
 }
 
 export interface ProposalListResult {
@@ -230,4 +275,21 @@ export interface ProposalStore {
     brokerUserId: string;
     proposalId: string;
   }): Promise<ProposalDocumentContext | null>;
+  createShareLink(input: {
+    brokerUserId: string;
+    proposalId: string;
+  }): Promise<ProposalShareLink>;
+  getShareLinkPreview(input: {
+    brokerUserId: string;
+    token: string;
+  }): Promise<ProposalSharePreview | null>;
+  acceptShareLink(input: {
+    brokerUserId: string;
+    token: string;
+  }): Promise<AcceptProposalShareLinkResult>;
+  removeGuest(input: {
+    brokerUserId: string;
+    proposalId: string;
+    guestUserId: string;
+  }): Promise<boolean>;
 }

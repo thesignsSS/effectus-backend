@@ -102,6 +102,25 @@ export class NotificationService {
     return notifications[0] ?? null;
   }
 
+  async notifyProposalOwnerAboutNewCollaborator(input: {
+    ownerUserId: string;
+    proposalId: string;
+    proposalCode: string;
+    guestName: string;
+  }): Promise<NotificationItem | null> {
+    const notifications = await this.store.createMany([
+      {
+        userId: input.ownerUserId,
+        proposalId: input.proposalId,
+        type: 'proposal_collaborator_added',
+        title: 'Novo convidado na proposta',
+        message: `${input.guestName} agora está vinculado à proposta ${input.proposalCode}.`,
+      },
+    ]);
+
+    return notifications[0] ?? null;
+  }
+
   async listByUser(userId: string) {
     return this.store.listByUser(userId);
   }

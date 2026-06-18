@@ -1,6 +1,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { randomUUID } from 'node:crypto';
 import {
+  AcceptProposalShareLinkResult,
   CreateProposalInput,
   DeleteProposalInput,
   DeleteProposalResult,
@@ -10,8 +11,11 @@ import {
   ProposalDetail,
   ProposalDocumentContext,
   ProposalDocumentLookup,
+  ProposalGuest,
   ProposalListItem,
   ProposalListResult,
+  ProposalShareLink,
+  ProposalSharePreview,
   ProposalStore,
   ProposalStatus,
   ProposalStatusInfo,
@@ -49,6 +53,12 @@ type ProposalRow = {
   created_at: string;
 };
 
+type ProposalCollaboratorRow = {
+  proposal_id: string;
+  user_id: string;
+  created_at: string;
+};
+
 type ProposalDocumentRow = {
   id: string;
   filename: string;
@@ -58,6 +68,23 @@ type ProposalDocumentRow = {
   size_bytes: number;
   uploaded_at: string;
   uploaded_by_user_id: string | null;
+};
+
+type ProposalShareLinkRow = {
+  proposal_id: string;
+  token: string;
+  created_by_user_id: string;
+  created_at: string;
+  revoked_at: string | null;
+};
+
+type ResolvedProposalAccess = {
+  proposalId: string;
+  ownerBrokerUserId: string;
+  ownerName: string;
+  isAdmin: boolean;
+  isOwner: boolean;
+  isCollaborator: boolean;
 };
 
 export class SupabaseProposalStore implements ProposalStore {
@@ -131,13 +158,11 @@ export class SupabaseProposalStore implements ProposalStore {
 
   async update(input: UpdateProposalInput): Promise<(ProposalStatusInfo & { effects?: ProposalUpdateEffects }) | undefined> {
     const access = await this.resolveAccess(input.brokerUserId);
-    const currentProposal = await this.getProposalForUpdate(
-      input.proposalId,
-      access.isAdmin ? undefined : input.brokerUserId,
-    );
+    const proposalAccess = await this.resolveProposalAccess(input.proposalId, input.brokerUserId);
+    const currentProposal = await this.getProposalForUpdate(input.proposalId);
     const payload: Record<string, unknown> = {};
 
-    if (!currentProposal) {
+    if (!proposalAccess || !currentProposal) {
       throw new Error('Proposta não encontrada');
     }
 
@@ -160,6 +185,7 @@ export class SupabaseProposalStore implements ProposalStore {
     const nextComments = normalizeProposalComments(currentProposal.proposal_comments);
     const trimmedPendingReason = input.pendingReason?.trim() ?? '';
     const trimmedCommentMessage = input.commentMessage?.trim() ?? '';
+    const updatedFieldChanges = collectUpdatedFieldChanges(currentProposal, input);
     let commentAdded = false;
     let resubmittedForAnalysis = false;
 
@@ -226,6 +252,17 @@ export class SupabaseProposalStore implements ProposalStore {
       }
     }
 
+    if (updatedFieldChanges.length > 0) {
+      nextComments.push(
+        buildProposalComment({
+          authorName: getAccessDisplayName(access),
+          authorRole: access.role,
+          message: buildProposalAuditMessage(updatedFieldChanges),
+          type: 'audit',
+        }),
+      );
+    }
+
     if (nextComments.length > 0) {
       payload.proposal_comments = nextComments;
     }
@@ -234,13 +271,12 @@ export class SupabaseProposalStore implements ProposalStore {
       return undefined;
     }
 
-    let query = this.client.from('proposals').update(payload).eq('id', input.proposalId);
-
-    if (!access.isAdmin) {
-      query = query.eq('broker_user_id', input.brokerUserId);
-    }
-
-    const { data, error } = await query.select('status').single();
+    const { data, error } = await this.client
+      .from('proposals')
+      .update(payload)
+      .eq('id', input.proposalId)
+      .select('status')
+      .single();
 
     if (error) {
       if (error.code === 'PGRST116') {
@@ -286,12 +322,18 @@ export class SupabaseProposalStore implements ProposalStore {
     pageSize: number;
   }): Promise<ProposalListResult> {
     const access = await this.resolveAccess(input.brokerUserId);
+    const sharedProposalIds = access.isAdmin
+      ? []
+      : await this.listSharedProposalIds(input.brokerUserId);
+    const accessibleProposalIds = access.isAdmin
+      ? []
+      : await this.listAccessibleProposalIds(input.brokerUserId);
     const from = (input.page - 1) * input.pageSize;
     const to = from + input.pageSize - 1;
     let query = this.client
       .from('proposals')
       .select(
-        'id, proposal_number, status, broker_name, client_name, property_type, created_at, proposal_documents(count)',
+        'id, proposal_number, broker_user_id, status, broker_name, client_name, property_type, created_at, proposal_documents(count)',
         { count: 'exact' },
       )
       .order('created_at', { ascending: false })
@@ -302,7 +344,20 @@ export class SupabaseProposalStore implements ProposalStore {
         query = query.eq('broker_user_id', input.ownerBrokerUserId);
       }
     } else {
-      query = query.eq('broker_user_id', input.brokerUserId);
+      if (accessibleProposalIds.length === 0) {
+        return {
+          items: [],
+          total: 0,
+          page: input.page,
+          pageSize: input.pageSize,
+        };
+      }
+
+      query = query.in('id', accessibleProposalIds);
+
+      if (input.ownerBrokerUserId) {
+        query = query.eq('broker_user_id', input.ownerBrokerUserId);
+      }
     }
 
     const normalizedSearch = input.search?.trim();
@@ -351,10 +406,12 @@ export class SupabaseProposalStore implements ProposalStore {
     }
 
     const items = ((data as Array<
-      Pick<ProposalRow, 'id' | 'proposal_number' | 'status' | 'broker_name' | 'client_name' | 'property_type' | 'created_at'> & {
+      Pick<ProposalRow, 'id' | 'proposal_number' | 'broker_user_id' | 'status' | 'broker_name' | 'client_name' | 'property_type' | 'created_at'> & {
         proposal_documents?: Array<{ count: number | null }>;
       }
-    > | null) ?? []).map((item) => this.toProposalListItem(item));
+    > | null) ?? []).map((item) =>
+      this.toProposalListItem(item, input.brokerUserId, new Set(sharedProposalIds)),
+    );
 
     return {
       items,
@@ -365,11 +422,24 @@ export class SupabaseProposalStore implements ProposalStore {
   }
 
   async countPendingByBroker(input: { brokerUserId: string }): Promise<number> {
-    const { count, error } = await this.client
+    const access = await this.resolveAccess(input.brokerUserId);
+    const accessibleProposalIds = access.isAdmin
+      ? []
+      : await this.listAccessibleProposalIds(input.brokerUserId);
+    let query = this.client
       .from('proposals')
       .select('id', { count: 'exact', head: true })
-      .eq('broker_user_id', input.brokerUserId)
       .eq('status', 'pendente');
+
+    if (!access.isAdmin) {
+      if (accessibleProposalIds.length === 0) {
+        return 0;
+      }
+
+      query = query.in('id', accessibleProposalIds);
+    }
+
+    const { count, error } = await query;
 
     if (error) {
       throw new Error(`Supabase pending proposals count failed: ${error.message}`);
@@ -382,8 +452,13 @@ export class SupabaseProposalStore implements ProposalStore {
     brokerUserId: string;
     proposalId: string;
   }): Promise<ProposalDetail | null> {
-    const access = await this.resolveAccess(input.brokerUserId);
-    let query = this.client
+    const proposalAccess = await this.resolveProposalAccess(input.proposalId, input.brokerUserId);
+
+    if (!proposalAccess) {
+      return null;
+    }
+
+    const { data, error } = await this.client
       .from('proposals')
       .select(`
         id,
@@ -415,13 +490,8 @@ export class SupabaseProposalStore implements ProposalStore {
           uploaded_by_user_id
         )
       `)
-      .eq('id', input.proposalId);
-
-    if (!access.isAdmin) {
-      query = query.eq('broker_user_id', input.brokerUserId);
-    }
-
-    const { data, error } = await query.single();
+      .eq('id', input.proposalId)
+      .single();
 
     if (error) {
       if (error.code === 'PGRST116') {
@@ -433,6 +503,7 @@ export class SupabaseProposalStore implements ProposalStore {
 
     return this.toProposalDetail(
       data as ProposalRow & { proposal_documents?: ProposalDocumentRow[] | null },
+      proposalAccess,
     );
   }
 
@@ -441,8 +512,13 @@ export class SupabaseProposalStore implements ProposalStore {
     proposalId: string;
     documentId: string;
   }): Promise<ProposalDocumentLookup | null> {
-    const access = await this.resolveAccess(input.brokerUserId);
-    let query = this.client
+    const proposalAccess = await this.resolveProposalAccess(input.proposalId, input.brokerUserId);
+
+    if (!proposalAccess) {
+      return null;
+    }
+
+    const { data, error } = await this.client
       .from('proposal_documents')
       .select(`
         id,
@@ -459,13 +535,8 @@ export class SupabaseProposalStore implements ProposalStore {
         )
       `)
       .eq('id', input.documentId)
-      .eq('proposal_id', input.proposalId);
-
-    if (!access.isAdmin) {
-      query = query.eq('proposals.broker_user_id', input.brokerUserId);
-    }
-
-    const { data, error } = await query.single();
+      .eq('proposal_id', input.proposalId)
+      .single();
 
     if (error) {
       if (error.code === 'PGRST116') {
@@ -479,6 +550,7 @@ export class SupabaseProposalStore implements ProposalStore {
   }
 
   async renameDocument(input: RenameProposalDocumentInput): Promise<void> {
+    const access = await this.resolveAccess(input.brokerUserId);
     const document = await this.getDocument(input);
     if (!document) {
       throw new Error('Documento da proposta não encontrado');
@@ -495,11 +567,18 @@ export class SupabaseProposalStore implements ProposalStore {
     if (error) {
       throw new Error(`Supabase proposal document rename failed: ${error.message}`);
     }
+
+    await this.appendProposalAuditComment(
+      input.proposalId,
+      access,
+      `Documento renomeado: "${document.originalFilename}" -> "${input.displayName}".`,
+    );
   }
 
   async deleteDocument(
     input: DeleteProposalDocumentInput,
   ): Promise<ProposalDocumentLookup | null> {
+    const access = await this.resolveAccess(input.brokerUserId);
     const document = await this.getDocument(input);
     if (!document) {
       return null;
@@ -515,11 +594,23 @@ export class SupabaseProposalStore implements ProposalStore {
       throw new Error(`Supabase proposal document delete failed: ${error.message}`);
     }
 
+    await this.appendProposalAuditComment(
+      input.proposalId,
+      access,
+      `Documento excluído: "${document.originalFilename}".`,
+    );
+
     return document;
   }
 
   async delete(input: DeleteProposalInput): Promise<DeleteProposalResult | null> {
     const access = await this.resolveAccess(input.brokerUserId);
+    const proposalAccess = await this.resolveProposalAccess(input.proposalId, input.brokerUserId);
+
+    if (!proposalAccess || (!access.isAdmin && !proposalAccess.isOwner)) {
+      return null;
+    }
+
     let query = this.client
       .from('proposals')
       .select(`
@@ -573,6 +664,7 @@ export class SupabaseProposalStore implements ProposalStore {
     proposalId: string;
     documents: CreateProposalInput['documents'];
   }): Promise<void> {
+    const access = await this.resolveAccess(input.brokerUserId);
     const proposal = await this.getProposalContext({
       brokerUserId: input.brokerUserId,
       proposalId: input.proposalId,
@@ -598,23 +690,35 @@ export class SupabaseProposalStore implements ProposalStore {
     if (error) {
       throw new Error(`Supabase proposal documents add failed: ${error.message}`);
     }
+
+    const uploadedNames = input.documents
+      .map((document) => document.originalFilename.trim())
+      .filter(Boolean);
+
+    await this.appendProposalAuditComment(
+      input.proposalId,
+      access,
+      uploadedNames.length === 1
+        ? `Documento enviado: "${uploadedNames[0]}".`
+        : `Documentos enviados (${uploadedNames.length}): ${uploadedNames.map((name) => `"${name}"`).join(', ')}.`,
+    );
   }
 
   async getProposalContext(input: {
     brokerUserId: string;
     proposalId: string;
   }): Promise<ProposalDocumentContext | null> {
-    const access = await this.resolveAccess(input.brokerUserId);
-    let query = this.client
-      .from('proposals')
-      .select('id, broker_user_id, broker_name, client_name')
-      .eq('id', input.proposalId);
+    const proposalAccess = await this.resolveProposalAccess(input.proposalId, input.brokerUserId);
 
-    if (!access.isAdmin) {
-      query = query.eq('broker_user_id', input.brokerUserId);
+    if (!proposalAccess) {
+      return null;
     }
 
-    const { data, error } = await query.single();
+    const { data, error } = await this.client
+      .from('proposals')
+      .select('id, broker_user_id, broker_name, client_name')
+      .eq('id', input.proposalId)
+      .single();
 
     if (error) {
       if (error.code === 'PGRST116') {
@@ -632,17 +736,180 @@ export class SupabaseProposalStore implements ProposalStore {
     };
   }
 
+  async createShareLink(input: {
+    brokerUserId: string;
+    proposalId: string;
+  }): Promise<ProposalShareLink> {
+    const access = await this.resolveAccess(input.brokerUserId);
+    const proposalAccess = await this.resolveProposalAccess(input.proposalId, input.brokerUserId);
+
+    if (!proposalAccess || (!access.isAdmin && !proposalAccess.isOwner)) {
+      throw new Error('Proposta não encontrada');
+    }
+
+    const existingShareLink = await this.getShareLinkByProposalId(input.proposalId);
+
+    if (existingShareLink) {
+      return {
+        token: existingShareLink.token,
+        createdAt: existingShareLink.created_at,
+      };
+    }
+
+    const token = randomUUID();
+    const { data, error } = await this.client
+      .from('proposal_share_links')
+      .upsert(
+        {
+          proposal_id: input.proposalId,
+          token,
+          created_by_user_id: input.brokerUserId,
+          revoked_at: null,
+        },
+        { onConflict: 'proposal_id' },
+      )
+      .select('token, created_at')
+      .single();
+
+    if (error || !data) {
+      throw new Error(`Supabase proposal share link create failed: ${error?.message ?? 'unknown error'}`);
+    }
+
+    return {
+      token: data.token,
+      createdAt: data.created_at,
+    };
+  }
+
+  async getShareLinkPreview(input: {
+    brokerUserId: string;
+    token: string;
+  }): Promise<ProposalSharePreview | null> {
+    const shareLink = await this.getShareLinkByToken(input.token);
+
+    if (!shareLink) {
+      return null;
+    }
+
+    const { data, error } = await this.client
+      .from('proposals')
+      .select('id, proposal_number, broker_user_id, broker_name, client_name')
+      .eq('id', shareLink.proposal_id)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return null;
+      }
+
+      throw new Error(`Supabase proposal share preview failed: ${error.message}`);
+    }
+
+    const ownerBrokerUserId = data.broker_user_id;
+    const isOwnedByCurrentUser = ownerBrokerUserId === input.brokerUserId;
+    const isAlreadyAttached = isOwnedByCurrentUser
+      ? true
+      : await this.hasProposalCollaborator(shareLink.proposal_id, input.brokerUserId);
+
+    return {
+      proposalId: data.id,
+      proposalCode: formatProposalCode(data.proposal_number),
+      clientName: data.client_name ?? '',
+      ownerBrokerUserId,
+      ownerName: data.broker_name ?? 'Corretor',
+      isOwnedByCurrentUser,
+      isAlreadyAttached,
+    };
+  }
+
+  async acceptShareLink(input: {
+    brokerUserId: string;
+    token: string;
+  }): Promise<AcceptProposalShareLinkResult> {
+    const access = await this.resolveAccess(input.brokerUserId);
+    const preview = await this.getShareLinkPreview(input);
+
+    if (!preview) {
+      throw new Error('Link de compartilhamento inválido ou expirado');
+    }
+
+    if (preview.isOwnedByCurrentUser) {
+      throw new Error('Você já é o dono desta proposta');
+    }
+
+    const { error } = await this.client
+      .from('proposal_collaborators')
+      .upsert(
+        {
+          proposal_id: preview.proposalId,
+          user_id: input.brokerUserId,
+        },
+        { onConflict: 'proposal_id,user_id', ignoreDuplicates: true },
+      );
+
+    if (error) {
+      throw new Error(`Supabase proposal collaborator create failed: ${error.message}`);
+    }
+
+    return {
+      proposalId: preview.proposalId,
+      proposalCode: preview.proposalCode,
+      ownerBrokerUserId: preview.ownerBrokerUserId,
+      ownerName: preview.ownerName,
+      guestName: getAccessDisplayName(access),
+      alreadyAttached: preview.isAlreadyAttached,
+    };
+  }
+
+  async removeGuest(input: {
+    brokerUserId: string;
+    proposalId: string;
+    guestUserId: string;
+  }): Promise<boolean> {
+    const access = await this.resolveAccess(input.brokerUserId);
+    const proposalAccess = await this.resolveProposalAccess(input.proposalId, input.brokerUserId);
+
+    if (!proposalAccess || (!access.isAdmin && !proposalAccess.isOwner)) {
+      throw new Error('Proposta não encontrada');
+    }
+
+    if (proposalAccess.ownerBrokerUserId === input.guestUserId) {
+      throw new Error('Não é possível remover o dono da proposta');
+    }
+
+    const { error, count } = await this.client
+      .from('proposal_collaborators')
+      .delete({ count: 'exact' })
+      .eq('proposal_id', input.proposalId)
+      .eq('user_id', input.guestUserId);
+
+    if (error) {
+      throw new Error(`Supabase proposal collaborator delete failed: ${error.message}`);
+    }
+
+    return (count ?? 0) > 0;
+  }
+
   private toProposalListItem(
-    row: Pick<ProposalRow, 'id' | 'proposal_number' | 'status' | 'broker_name' | 'client_name' | 'property_type' | 'created_at'> & {
+    row: Pick<ProposalRow, 'id' | 'proposal_number' | 'broker_user_id' | 'status' | 'broker_name' | 'client_name' | 'property_type' | 'created_at'> & {
       proposal_documents?: Array<{ count: number | null }>;
     },
+    currentUserId: string,
+    sharedProposalIds: Set<string>,
   ): ProposalListItem {
     const status = toStatusInfo(row.status);
+    const isOwnedByCurrentUser = row.broker_user_id === currentUserId;
+    const isSharedWithCurrentUser =
+      !isOwnedByCurrentUser && sharedProposalIds.has(row.id);
 
     return {
       id: row.id,
       proposalCode: formatProposalCode(row.proposal_number),
       ...status,
+      ownerBrokerUserId: row.broker_user_id,
+      ownerName: row.broker_name ?? '',
+      isOwnedByCurrentUser,
+      isSharedWithCurrentUser,
       clientName: row.client_name ?? '',
       brokerName: row.broker_name ?? '',
       propertyType: row.property_type ?? '',
@@ -653,6 +920,7 @@ export class SupabaseProposalStore implements ProposalStore {
 
   private async toProposalDetail(
     row: ProposalRow & { proposal_documents?: ProposalDocumentRow[] | null },
+    proposalAccess: ResolvedProposalAccess,
   ): Promise<ProposalDetail> {
     const status = toStatusInfo(row.status);
     const documents = row.proposal_documents ?? [];
@@ -668,6 +936,11 @@ export class SupabaseProposalStore implements ProposalStore {
       id: row.id,
       proposalCode: formatProposalCode(row.proposal_number),
       ...status,
+      ownerBrokerUserId: row.broker_user_id,
+      ownerName: row.broker_name ?? '',
+      isOwnedByCurrentUser: proposalAccess.isOwner,
+      isSharedWithCurrentUser: proposalAccess.isCollaborator,
+      canDeleteProposal: proposalAccess.isOwner || proposalAccess.isAdmin,
       brokerName: row.broker_name ?? '',
       brokerPhone: row.broker_phone ?? '',
       createdAt: row.created_at,
@@ -707,6 +980,12 @@ export class SupabaseProposalStore implements ProposalStore {
           storageLocation: document.storage_location,
         };
       }),
+      guests: proposalAccess.isOwner || proposalAccess.isAdmin
+        ? await this.listProposalGuests(row.id)
+        : [],
+      shareLinkToken: proposalAccess.isOwner || proposalAccess.isAdmin
+        ? (await this.getShareLinkByProposalId(row.id))?.token ?? null
+        : null,
     };
   }
 
@@ -745,6 +1024,151 @@ export class SupabaseProposalStore implements ProposalStore {
     );
   }
 
+  private async appendProposalAuditComment(
+    proposalId: string,
+    access: { role: UserRole; fullName: string },
+    message: string,
+  ): Promise<void> {
+    const currentProposal = await this.getProposalForUpdate(proposalId);
+
+    if (!currentProposal) {
+      throw new Error('Proposta não encontrada');
+    }
+
+    const nextComments = normalizeProposalComments(currentProposal.proposal_comments);
+    nextComments.push(
+      buildProposalComment({
+        authorName: getAccessDisplayName(access),
+        authorRole: access.role,
+        message,
+        type: 'audit',
+      }),
+    );
+
+    const { error } = await this.client
+      .from('proposals')
+      .update({
+        proposal_comments: nextComments,
+      })
+      .eq('id', proposalId);
+
+    if (error) {
+      throw new Error(`Supabase proposal audit append failed: ${error.message}`);
+    }
+  }
+
+  private async listProposalGuests(proposalId: string): Promise<ProposalGuest[]> {
+    const { data, error } = await this.client
+      .from('proposal_collaborators')
+      .select('proposal_id, user_id, created_at')
+      .eq('proposal_id', proposalId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      throw new Error(`Supabase proposal collaborators list failed: ${error.message}`);
+    }
+
+    const collaborators = (data as ProposalCollaboratorRow[] | null) ?? [];
+    const names = await this.getProfileNamesByIds(collaborators.map((item) => item.user_id));
+
+    return collaborators.map((collaborator) => ({
+      userId: collaborator.user_id,
+      name: names.get(collaborator.user_id)?.trim() || 'Usuário',
+      joinedAt: collaborator.created_at,
+    }));
+  }
+
+  private async listSharedProposalIds(userId: string): Promise<string[]> {
+    const { data, error } = await this.client
+      .from('proposal_collaborators')
+      .select('proposal_id')
+      .eq('user_id', userId);
+
+    if (error) {
+      throw new Error(`Supabase shared proposals list failed: ${error.message}`);
+    }
+
+    return ((data as Array<{ proposal_id: string }> | null) ?? []).map(
+      (item) => item.proposal_id,
+    );
+  }
+
+  private async listAccessibleProposalIds(userId: string): Promise<string[]> {
+    const [sharedProposalIds, ownedProposalIds] = await Promise.all([
+      this.listSharedProposalIds(userId),
+      this.listOwnedProposalIds(userId),
+    ]);
+
+    return Array.from(new Set([...ownedProposalIds, ...sharedProposalIds]));
+  }
+
+  private async listOwnedProposalIds(userId: string): Promise<string[]> {
+    const { data, error } = await this.client
+      .from('proposals')
+      .select('id')
+      .eq('broker_user_id', userId);
+
+    if (error) {
+      throw new Error(`Supabase owned proposals list failed: ${error.message}`);
+    }
+
+    return ((data as Array<{ id: string }> | null) ?? []).map((item) => item.id);
+  }
+
+  private async hasProposalCollaborator(proposalId: string, userId: string): Promise<boolean> {
+    const { count, error } = await this.client
+      .from('proposal_collaborators')
+      .select('proposal_id', { count: 'exact', head: true })
+      .eq('proposal_id', proposalId)
+      .eq('user_id', userId);
+
+    if (error) {
+      throw new Error(`Supabase proposal collaborator lookup failed: ${error.message}`);
+    }
+
+    return (count ?? 0) > 0;
+  }
+
+  private async getShareLinkByToken(token: string): Promise<ProposalShareLinkRow | null> {
+    const { data, error } = await this.client
+      .from('proposal_share_links')
+      .select('proposal_id, token, created_by_user_id, created_at, revoked_at')
+      .eq('token', token)
+      .is('revoked_at', null)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return null;
+      }
+
+      throw new Error(`Supabase proposal share link get failed: ${error.message}`);
+    }
+
+    return data as ProposalShareLinkRow;
+  }
+
+  private async getShareLinkByProposalId(
+    proposalId: string,
+  ): Promise<ProposalShareLinkRow | null> {
+    const { data, error } = await this.client
+      .from('proposal_share_links')
+      .select('proposal_id, token, created_by_user_id, created_at, revoked_at')
+      .eq('proposal_id', proposalId)
+      .is('revoked_at', null)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return null;
+      }
+
+      throw new Error(`Supabase proposal share link by proposal get failed: ${error.message}`);
+    }
+
+    return data as ProposalShareLinkRow;
+  }
+
   private async resolveAccess(userId: string): Promise<{ isAdmin: boolean; role: UserRole; fullName: string }> {
     const { data, error } = await this.client
       .from('profiles')
@@ -768,21 +1192,69 @@ export class SupabaseProposalStore implements ProposalStore {
     };
   }
 
+  private async resolveProposalAccess(
+    proposalId: string,
+    userId: string,
+  ): Promise<ResolvedProposalAccess | null> {
+    const access = await this.resolveAccess(userId);
+    const { data, error } = await this.client
+      .from('proposals')
+      .select('id, broker_user_id, broker_name')
+      .eq('id', proposalId)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return null;
+      }
+
+      throw new Error(`Supabase proposal access get failed: ${error.message}`);
+    }
+
+    const isOwner = data.broker_user_id === userId;
+    const isCollaborator = isOwner || access.isAdmin
+      ? false
+      : await this.hasProposalCollaborator(proposalId, userId);
+
+    if (!access.isAdmin && !isOwner && !isCollaborator) {
+      return null;
+    }
+
+    return {
+      proposalId: data.id,
+      ownerBrokerUserId: data.broker_user_id,
+      ownerName: data.broker_name ?? 'Corretor',
+      isAdmin: access.isAdmin,
+      isOwner,
+      isCollaborator,
+    };
+  }
+
   private async getProposalForUpdate(
     proposalId: string,
-    brokerUserId?: string,
-  ): Promise<(Pick<ProposalRow, 'status' | 'proposal_comments' | 'broker_name' | 'broker_phone'> & {
+  ): Promise<(Pick<
+    ProposalRow,
+    | 'status'
+    | 'proposal_comments'
+    | 'broker_name'
+    | 'broker_phone'
+    | 'client_name'
+    | 'client_cpf'
+    | 'client_email'
+    | 'client_phone'
+    | 'property_type'
+    | 'property_city'
+    | 'property_state'
+    | 'additional_info'
+    | 'form_data'
+  > & {
     proposalCode: string;
     broker_user_id: string;
   }) | null> {
     let query = this.client
       .from('proposals')
-      .select('status, proposal_comments, broker_name, broker_phone, broker_user_id, proposal_number')
+      .select('status, proposal_comments, broker_name, broker_phone, broker_user_id, proposal_number, client_name, client_cpf, client_email, client_phone, property_type, property_city, property_state, additional_info, form_data')
       .eq('id', proposalId);
-
-    if (brokerUserId) {
-      query = query.eq('broker_user_id', brokerUserId);
-    }
 
     const { data, error } = await query.single();
 
@@ -794,7 +1266,22 @@ export class SupabaseProposalStore implements ProposalStore {
       throw new Error(`Supabase proposal update context failed: ${error.message}`);
     }
 
-    const row = data as Pick<ProposalRow, 'status' | 'proposal_comments' | 'broker_name' | 'broker_phone'> & {
+    const row = data as Pick<
+      ProposalRow,
+      | 'status'
+      | 'proposal_comments'
+      | 'broker_name'
+      | 'broker_phone'
+      | 'client_name'
+      | 'client_cpf'
+      | 'client_email'
+      | 'client_phone'
+      | 'property_type'
+      | 'property_city'
+      | 'property_state'
+      | 'additional_info'
+      | 'form_data'
+    > & {
       broker_user_id: string;
       proposal_number: number;
     };
@@ -863,7 +1350,11 @@ function normalizeProposalComments(value: unknown): ProposalComment[] {
 }
 
 function normalizeCommentType(value: unknown): ProposalCommentType {
-  if (value === 'pending_reason' || value === 'resubmission') {
+  if (
+    value === 'pending_reason' ||
+    value === 'resubmission' ||
+    value === 'audit'
+  ) {
     return value;
   }
 
@@ -902,4 +1393,95 @@ function parseProposalNumber(value: string): number | null {
   }
 
   return Number(digits);
+}
+
+type ProposalFieldChange = {
+  label: string;
+  previousValue: string;
+  nextValue: string;
+};
+
+function collectUpdatedFieldChanges(
+  currentProposal: Pick<
+    ProposalRow,
+    | 'broker_phone'
+    | 'client_name'
+    | 'client_cpf'
+    | 'client_email'
+    | 'client_phone'
+    | 'property_type'
+    | 'property_city'
+    | 'property_state'
+    | 'additional_info'
+    | 'form_data'
+  >,
+  input: UpdateProposalInput,
+): ProposalFieldChange[] {
+  const changes: ProposalFieldChange[] = [];
+
+  appendFieldChange(changes, 'telefone do corretor', currentProposal.broker_phone, input.brokerPhone);
+  appendFieldChange(changes, 'nome do cliente', currentProposal.client_name, input.clientName);
+  appendFieldChange(changes, 'CPF do cliente', currentProposal.client_cpf, input.clientCpf);
+  appendFieldChange(changes, 'e-mail do cliente', currentProposal.client_email, input.clientEmail);
+  appendFieldChange(changes, 'telefone do cliente', currentProposal.client_phone, input.clientPhone);
+  appendFieldChange(changes, 'tipo do imóvel', currentProposal.property_type, input.propertyType);
+  appendFieldChange(changes, 'cidade do imóvel', currentProposal.property_city, input.propertyCity);
+  appendFieldChange(changes, 'UF do imóvel', currentProposal.property_state, input.propertyState);
+  appendFieldChange(changes, 'informações adicionais', currentProposal.additional_info, input.additionalInfo);
+
+  return changes;
+}
+
+function buildProposalAuditMessage(updatedFieldChanges: ProposalFieldChange[]): string {
+  return updatedFieldChanges
+    .map(
+      (change) =>
+        `${capitalize(change.label)}: de "${change.previousValue}" para "${change.nextValue}".`,
+    )
+    .join('\n');
+}
+
+function normalizeValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function appendFieldChange(
+  changes: ProposalFieldChange[],
+  label: string,
+  previousValue: unknown,
+  nextValue: unknown,
+) {
+  if (nextValue === undefined) {
+    return;
+  }
+
+  const normalizedPreviousValue = displayAuditValue(previousValue);
+  const normalizedNextValue = displayAuditValue(nextValue);
+
+  if (normalizedPreviousValue === normalizedNextValue) {
+    return;
+  }
+
+  changes.push({
+    label,
+    previousValue: normalizedPreviousValue,
+    nextValue: normalizedNextValue,
+  });
+}
+
+function displayAuditValue(value: unknown): string {
+  if (typeof value === 'string') {
+    const normalized = value.trim();
+    return normalized || 'vazio';
+  }
+
+  return 'vazio';
+}
+
+function capitalize(value: string): string {
+  if (!value) {
+    return value;
+  }
+
+  return `${value[0].toUpperCase()}${value.slice(1)}`;
 }

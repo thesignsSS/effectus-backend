@@ -200,9 +200,41 @@ export class FormSubmissionHttpServer {
 
     if (
       request.method === 'GET' &&
+      requestUrl.pathname.match(/^\/api\/proposal-share-links\/[^/]+$/)
+    ) {
+      await this.handleGetProposalSharePreview(requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'POST' &&
+      requestUrl.pathname.match(/^\/api\/proposal-share-links\/[^/]+\/accept$/)
+    ) {
+      await this.handleAcceptProposalShareLink(request, requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'GET' &&
       requestUrl.pathname.match(/^\/api\/proposals\/[^/]+\/download$/)
     ) {
       await this.handleDownloadProposal(requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'POST' &&
+      requestUrl.pathname.match(/^\/api\/proposals\/[^/]+\/share-link$/)
+    ) {
+      await this.handleCreateProposalShareLink(request, requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'DELETE' &&
+      requestUrl.pathname.match(/^\/api\/proposals\/[^/]+\/guests\/[^/]+$/)
+    ) {
+      await this.handleRemoveProposalGuest(requestUrl, response);
       return;
     }
 
@@ -866,6 +898,90 @@ export class FormSubmissionHttpServer {
     }
   }
 
+  private async handleGetProposalSharePreview(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const brokerUserId = requestUrl.searchParams.get('brokerUserId')?.trim();
+    const token = getRequiredPathSegment(requestUrl.pathname, 2, 'shareToken');
+
+    if (!brokerUserId) {
+      this.sendJson(response, 400, {
+        ok: false,
+        error: 'Campo obrigatório ausente: brokerUserId',
+      });
+      return;
+    }
+
+    try {
+      const preview = await this.proposalStore.getShareLinkPreview({
+        brokerUserId,
+        token,
+      });
+
+      if (!preview) {
+        this.sendJson(response, 404, {
+          ok: false,
+          error: 'Link de compartilhamento inválido ou expirado',
+        });
+        return;
+      }
+
+      this.sendJson(response, 200, preview as unknown as JsonObject);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao consultar preview do link de compartilhamento', {
+        error: message,
+        brokerUserId,
+        token,
+      });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
+    }
+  }
+
+  private async handleAcceptProposalShareLink(
+    request: IncomingMessage,
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const payload = await this.readJsonBody(request);
+    const brokerUserId = readRequiredString(payload, 'brokerUserId', 'corretorUserId');
+    const token = getRequiredPathSegment(requestUrl.pathname, 2, 'shareToken');
+
+    try {
+      const result = await this.proposalStore.acceptShareLink({
+        brokerUserId,
+        token,
+      });
+
+      this.sendJson(response, 200, {
+        ok: true,
+        proposalId: result.proposalId,
+        proposalCode: result.proposalCode,
+        ownerBrokerUserId: result.ownerBrokerUserId,
+        ownerName: result.ownerName,
+        alreadyAttached: result.alreadyAttached,
+      });
+
+      if (!result.alreadyAttached) {
+        void this.notificationService.notifyProposalOwnerAboutNewCollaborator({
+          ownerUserId: result.ownerBrokerUserId,
+          proposalId: result.proposalId,
+          proposalCode: result.proposalCode,
+          guestName: result.guestName,
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao aceitar link de compartilhamento da proposta', {
+        error: message,
+        brokerUserId,
+        token,
+      });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
+    }
+  }
+
   private async handleGetProposal(
     requestUrl: URL,
     response: ServerResponse,
@@ -925,6 +1041,37 @@ export class FormSubmissionHttpServer {
         proposalId,
       });
       this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handleCreateProposalShareLink(
+    request: IncomingMessage,
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const payload = await this.readJsonBody(request);
+    const brokerUserId = readRequiredString(payload, 'brokerUserId', 'corretorUserId');
+    const proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
+
+    try {
+      const shareLink = await this.proposalStore.createShareLink({
+        brokerUserId,
+        proposalId,
+      });
+
+      this.sendJson(response, 200, {
+        ok: true,
+        token: shareLink.token,
+        createdAt: shareLink.createdAt,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao criar link de compartilhamento da proposta', {
+        error: message,
+        brokerUserId,
+        proposalId,
+      });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
     }
   }
 
@@ -1261,6 +1408,44 @@ export class FormSubmissionHttpServer {
     }
   }
 
+  private async handleRemoveProposalGuest(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const brokerUserId = requestUrl.searchParams.get('brokerUserId')?.trim();
+    if (!brokerUserId) {
+      this.sendJson(response, 400, { ok: false, error: 'Campo obrigatório ausente: brokerUserId' });
+      return;
+    }
+
+    const proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
+    const guestUserId = getRequiredPathSegment(requestUrl.pathname, 4, 'guestUserId');
+
+    try {
+      const removed = await this.proposalStore.removeGuest({
+        brokerUserId,
+        proposalId,
+        guestUserId,
+      });
+
+      if (!removed) {
+        this.sendJson(response, 404, { ok: false, error: 'Convidado não encontrado' });
+        return;
+      }
+
+      this.sendJson(response, 200, { ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao remover convidado da proposta', {
+        error: message,
+        brokerUserId,
+        proposalId,
+        guestUserId,
+      });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
+    }
+  }
+
   private async handleViewProposalDocument(
     requestUrl: URL,
     response: ServerResponse,
@@ -1444,7 +1629,11 @@ export class FormSubmissionHttpServer {
       return 403;
     }
 
-    if (message.includes('não encontrada') || message.includes('não encontrado')) {
+    if (
+      message.includes('não encontrada') ||
+      message.includes('não encontrado') ||
+      message.includes('expirado')
+    ) {
       return 404;
     }
 
