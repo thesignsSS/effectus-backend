@@ -118,9 +118,10 @@ export class SupabaseStorageClient implements StorageProvider {
     const folder = this.normalizeFolder();
     const brokerFolder = sanitizePathSegment(options?.brokerName ?? 'Sem corretor');
     const clientFolder = sanitizePathSegment(options?.clientName ?? 'Sem cliente');
+    const sanitizedFilename = sanitizePathSegment(filename);
     const nestedFolder = [folder, brokerFolder, clientFolder].filter(Boolean).join('/');
 
-    return nestedFolder ? `${nestedFolder}/${filename}` : filename;
+    return nestedFolder ? `${nestedFolder}/${sanitizedFilename}` : sanitizedFilename;
   }
 
   private normalizeFolder(): string {
@@ -234,12 +235,22 @@ export class SupabaseStorageClient implements StorageProvider {
 }
 
 function sanitizePathSegment(value: string): string {
-  const sanitized = value
-    .normalize('NFC')
-    .replace(/[<>:"/\\|?*]+/g, '_')
-    .replace(/\s+/g, ' ')
+  const sanitized = replaceControlCharacters(value)
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w.\- ]+/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
     .trim()
-    .replace(/^\.+|\.+$/g, '');
+    .replace(/^[_\.]+|[_\.]+$/g, '');
 
   return sanitized || 'Sem nome';
+}
+
+function replaceControlCharacters(value: string): string {
+  return [...value]
+    .map((character) =>
+      (character.codePointAt(0) ?? 0) < 32 ? '_' : character,
+    )
+    .join('');
 }
