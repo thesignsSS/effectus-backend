@@ -17,6 +17,8 @@ export type ProposalCommentType =
 export interface ProposalComment {
   id: string;
   authorName: string;
+  authorUserId?: string | null;
+  authorAvatarPath?: string | null;
   authorRole: 'admin' | 'broker';
   createdAt: string;
   message: string;
@@ -87,6 +89,7 @@ export interface ProposalListItem {
   statusLabel: string;
   ownerBrokerUserId: string;
   ownerName: string;
+  ownerAvatarPath: string | null;
   isOwnedByCurrentUser: boolean;
   isSharedWithCurrentUser: boolean;
   clientName: string;
@@ -223,6 +226,7 @@ export interface ProposalDetail {
   statusLabel: string;
   ownerBrokerUserId: string;
   ownerName: string;
+  ownerAvatarPath: string | null;
   isOwnedByCurrentUser: boolean;
   isSharedWithCurrentUser: boolean;
   canDeleteProposal: boolean;

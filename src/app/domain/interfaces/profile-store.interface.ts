@@ -6,6 +6,8 @@ export interface UserProfile {
   role: UserRole;
   isAdmin: boolean;
   isActive: boolean;
+  avatarPath: string | null;
+  updatedAt: string | null;
 }
 
 export interface ProfileStore {

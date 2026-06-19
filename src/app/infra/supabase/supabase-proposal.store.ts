@@ -214,6 +214,7 @@ export class SupabaseProposalStore implements ProposalStore {
           nextComments.push(
             buildProposalComment({
               authorName: getAccessDisplayName(access),
+              authorUserId: input.brokerUserId,
               authorRole: access.role,
               message: pendingReason,
               type: 'pending_reason',
@@ -233,6 +234,7 @@ export class SupabaseProposalStore implements ProposalStore {
         nextComments.push(
           buildProposalComment({
             authorName: getAccessDisplayName(access),
+            authorUserId: input.brokerUserId,
             authorRole: access.role,
             message: trimmedCommentMessage || 'Proposta reenviada para análise.',
             type: 'resubmission',
@@ -255,6 +257,7 @@ export class SupabaseProposalStore implements ProposalStore {
         nextComments.push(
           buildProposalComment({
             authorName: getAccessDisplayName(access),
+            authorUserId: input.brokerUserId,
             authorRole: access.role,
             message: trimmedCommentMessage,
             type: 'comment',
@@ -268,6 +271,7 @@ export class SupabaseProposalStore implements ProposalStore {
       nextComments.push(
         buildProposalComment({
           authorName: getAccessDisplayName(access),
+          authorUserId: input.brokerUserId,
           authorRole: access.role,
           message: buildProposalAuditMessage(updatedFieldChanges),
           type: 'audit',
@@ -417,12 +421,22 @@ export class SupabaseProposalStore implements ProposalStore {
       throw new Error(`Supabase proposals list failed: ${error.message}`);
     }
 
-    const items = ((data as Array<
+    const rows = ((data as Array<
       Pick<ProposalRow, 'id' | 'proposal_number' | 'broker_user_id' | 'status' | 'broker_name' | 'client_name' | 'property_type' | 'created_at'> & {
         proposal_documents?: Array<{ count: number | null }>;
       }
-    > | null) ?? []).map((item) =>
-      this.toProposalListItem(item, input.brokerUserId, new Set(sharedProposalIds)),
+    > | null) ?? []);
+    const ownerAvatarPaths = await this.getProfileAvatarPathsByIds(
+      rows.map((item) => item.broker_user_id),
+    );
+    const sharedProposalIdsSet = new Set(sharedProposalIds);
+    const items = rows.map((item) =>
+      this.toProposalListItem(
+        item,
+        input.brokerUserId,
+        sharedProposalIdsSet,
+        ownerAvatarPaths.get(item.broker_user_id) ?? null,
+      ),
     );
 
     return {
@@ -582,6 +596,7 @@ export class SupabaseProposalStore implements ProposalStore {
 
     await this.appendProposalAuditComment(
       input.proposalId,
+      input.brokerUserId,
       access,
       `Documento renomeado: "${document.originalFilename}" -> "${input.displayName}".`,
     );
@@ -608,6 +623,7 @@ export class SupabaseProposalStore implements ProposalStore {
 
     await this.appendProposalAuditComment(
       input.proposalId,
+      input.brokerUserId,
       access,
       `Documento excluído: "${document.originalFilename}".`,
     );
@@ -709,6 +725,7 @@ export class SupabaseProposalStore implements ProposalStore {
 
     await this.appendProposalAuditComment(
       input.proposalId,
+      input.brokerUserId,
       access,
       uploadedNames.length === 1
         ? `Documento enviado: "${uploadedNames[0]}".`
@@ -1051,6 +1068,7 @@ export class SupabaseProposalStore implements ProposalStore {
     },
     currentUserId: string,
     sharedProposalIds: Set<string>,
+    ownerAvatarPath: string | null,
   ): ProposalListItem {
     const status = toStatusInfo(row.status);
     const isOwnedByCurrentUser = row.broker_user_id === currentUserId;
@@ -1063,6 +1081,7 @@ export class SupabaseProposalStore implements ProposalStore {
       ...status,
       ownerBrokerUserId: row.broker_user_id,
       ownerName: row.broker_name ?? '',
+      ownerAvatarPath,
       isOwnedByCurrentUser,
       isSharedWithCurrentUser,
       clientName: row.client_name ?? '',
@@ -1079,6 +1098,7 @@ export class SupabaseProposalStore implements ProposalStore {
   ): Promise<ProposalDetail> {
     const status = toStatusInfo(row.status);
     const documents = row.proposal_documents ?? [];
+    const normalizedComments = normalizeProposalComments(row.proposal_comments);
     const uploaderNames = await this.getProfileNamesByIds(
       Array.from(
         new Set(
@@ -1086,6 +1106,10 @@ export class SupabaseProposalStore implements ProposalStore {
         ),
       ),
     );
+    const authorAvatarPaths = await this.getProfileAvatarPathsByIds([
+      row.broker_user_id,
+      ...normalizedComments.map((comment) => comment.authorUserId ?? '').filter(Boolean),
+    ]);
 
     return {
       id: row.id,
@@ -1093,6 +1117,7 @@ export class SupabaseProposalStore implements ProposalStore {
       ...status,
       ownerBrokerUserId: row.broker_user_id,
       ownerName: row.broker_name ?? '',
+      ownerAvatarPath: authorAvatarPaths.get(row.broker_user_id) ?? null,
       isOwnedByCurrentUser: proposalAccess.isOwner,
       isSharedWithCurrentUser: proposalAccess.isCollaborator,
       canDeleteProposal: proposalAccess.isOwner || proposalAccess.isAdmin,
@@ -1113,7 +1138,12 @@ export class SupabaseProposalStore implements ProposalStore {
       },
       additionalInfo: row.additional_info ?? '',
       formData: row.form_data ?? {},
-      comments: normalizeProposalComments(row.proposal_comments),
+      comments: normalizedComments.map((comment) => ({
+        ...comment,
+        authorAvatarPath: comment.authorUserId
+          ? (authorAvatarPaths.get(comment.authorUserId) ?? null)
+          : null,
+      })),
       documents: documents.map((document) => {
         const uploadedByUserId = document.uploaded_by_user_id ?? row.broker_user_id;
         const isUploadedByProposalOwner = uploadedByUserId === row.broker_user_id;
@@ -1182,8 +1212,32 @@ export class SupabaseProposalStore implements ProposalStore {
     );
   }
 
+  private async getProfileAvatarPathsByIds(userIds: string[]): Promise<Map<string, string | null>> {
+    const uniqueUserIds = Array.from(new Set(userIds.filter(Boolean)));
+
+    if (uniqueUserIds.length === 0) {
+      return new Map();
+    }
+
+    const { data, error } = await this.client
+      .from('profiles')
+      .select('id, avatar_path')
+      .in('id', uniqueUserIds);
+
+    if (error) {
+      throw new Error(`Supabase uploader avatars get failed: ${error.message}`);
+    }
+
+    return new Map(
+      ((data as Array<{ id: string; avatar_path: string | null }> | null) ?? []).map(
+        (profile) => [profile.id, profile.avatar_path ?? null],
+      ),
+    );
+  }
+
   private async appendProposalAuditComment(
     proposalId: string,
+    actorUserId: string,
     access: { role: UserRole; fullName: string },
     message: string,
   ): Promise<void> {
@@ -1197,6 +1251,7 @@ export class SupabaseProposalStore implements ProposalStore {
     nextComments.push(
       buildProposalComment({
         authorName: getAccessDisplayName(access),
+        authorUserId: actorUserId,
         authorRole: access.role,
         message,
         type: 'audit',
@@ -1624,6 +1679,10 @@ function normalizeProposalComments(value: unknown): ProposalComment[] {
     return [{
       id: record.id,
       authorName: record.authorName,
+      authorUserId:
+        typeof record.authorUserId === 'string' && record.authorUserId
+          ? record.authorUserId
+          : null,
       authorRole: record.authorRole,
       createdAt: record.createdAt,
       message: record.message,
@@ -1646,6 +1705,7 @@ function normalizeCommentType(value: unknown): ProposalCommentType {
 
 function buildProposalComment(input: {
   authorName: string;
+  authorUserId: string;
   authorRole: UserRole;
   message: string;
   type: ProposalCommentType;
@@ -1653,6 +1713,7 @@ function buildProposalComment(input: {
   return {
     id: randomUUID(),
     authorName: input.authorName,
+    authorUserId: input.authorUserId,
     authorRole: input.authorRole,
     createdAt: new Date().toISOString(),
     message: input.message,

@@ -31,7 +31,7 @@ export class SupabaseProfileStore implements ProfileStore {
   async getById(userId: string): Promise<UserProfile | null> {
     const { data, error } = await this.client
       .from('profiles')
-      .select('id, full_name, role, is_active')
+      .select('id, full_name, role, is_active, avatar_path, updated_at')
       .eq('id', userId)
       .single();
 
@@ -51,6 +51,8 @@ export class SupabaseProfileStore implements ProfileStore {
       role,
       isAdmin: role === 'admin',
       isActive: data.is_active !== false,
+      avatarPath: data.avatar_path ?? null,
+      updatedAt: data.updated_at ?? null,
     };
   }
 
@@ -61,7 +63,7 @@ export class SupabaseProfileStore implements ProfileStore {
   }): Promise<UserProfile[]> {
     let query = this.client
       .from('profiles')
-      .select('id, full_name, role, is_active')
+      .select('id, full_name, role, is_active, avatar_path, updated_at')
       .eq('is_active', true)
       .ilike('full_name', `%${input.query.replace(/[,%]/g, '')}%`)
       .limit(Math.min(20, Math.max(1, input.limit ?? 10)));
@@ -81,6 +83,8 @@ export class SupabaseProfileStore implements ProfileStore {
       full_name: string | null;
       role: string | null;
       is_active: boolean | null;
+      avatar_path: string | null;
+      updated_at: string | null;
     }> | null) ?? []).map((item) => {
       const role = (item.role === 'admin' ? 'admin' : 'broker') as UserRole;
 
@@ -90,6 +94,8 @@ export class SupabaseProfileStore implements ProfileStore {
         role,
         isAdmin: role === 'admin',
         isActive: item.is_active !== false,
+        avatarPath: item.avatar_path ?? null,
+        updatedAt: item.updated_at ?? null,
       };
     });
   }

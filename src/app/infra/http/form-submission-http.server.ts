@@ -408,6 +408,8 @@ export class FormSubmissionHttpServer {
         role: profile.role,
         isAdmin: profile.isAdmin,
         isActive: profile.isActive,
+        avatarPath: profile.avatarPath,
+        updatedAt: profile.updatedAt,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
