@@ -1,5 +1,18 @@
 export type UserRole = 'broker' | 'admin';
 
+export interface StoredUserPreferences {
+  theme?: string;
+  fontSize?: string;
+  density?: string;
+  proposalsLayout?: string;
+  chatWallpaper?: string;
+  enterBehavior?: string;
+  notifications?: {
+    sound?: boolean;
+    types?: Record<string, boolean>;
+  };
+}
+
 export interface UserProfile {
   id: string;
   fullName: string;
@@ -7,6 +20,9 @@ export interface UserProfile {
   isAdmin: boolean;
   isActive: boolean;
   avatarPath: string | null;
+  canViewPreferencesInsights: boolean;
+  preferencesSnapshot: StoredUserPreferences | null;
+  preferencesUpdatedAt: string | null;
   updatedAt: string | null;
 }
 
@@ -17,4 +33,5 @@ export interface ProfileStore {
     excludeUserId?: string;
     limit?: number;
   }): Promise<UserProfile[]>;
+  listPreferenceInsights(): Promise<UserProfile[]>;
 }

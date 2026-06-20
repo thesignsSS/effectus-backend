@@ -114,6 +114,14 @@ export class FormSubmissionHttpServer {
       return;
     }
 
+    if (
+      request.method === 'GET' &&
+      requestUrl.pathname === '/api/profiles/preferences-insights'
+    ) {
+      await this.handlePreferenceInsights(requestUrl, response);
+      return;
+    }
+
     if (request.method === 'GET' && requestUrl.pathname === '/api/notifications') {
       await this.handleListNotifications(requestUrl, response);
       return;
@@ -409,6 +417,7 @@ export class FormSubmissionHttpServer {
         isAdmin: profile.isAdmin,
         isActive: profile.isActive,
         avatarPath: profile.avatarPath,
+        canViewPreferencesInsights: profile.canViewPreferencesInsights,
         updatedAt: profile.updatedAt,
       });
     } catch (error) {
@@ -462,6 +471,115 @@ export class FormSubmissionHttpServer {
         error: message,
         userId,
         query,
+      });
+      this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handlePreferenceInsights(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const userId = requestUrl.searchParams.get('userId')?.trim();
+
+    if (!userId) {
+      this.sendJson(response, 400, {
+        ok: false,
+        error: 'Campo obrigatório ausente: userId',
+      });
+      return;
+    }
+
+    try {
+      const requesterProfile = await this.profileStore.getById(userId);
+
+      if (!requesterProfile) {
+        this.sendJson(response, 404, {
+          ok: false,
+          error: 'Perfil não encontrado',
+        });
+        return;
+      }
+
+      if (!requesterProfile.canViewPreferencesInsights) {
+        this.sendJson(response, 403, {
+          ok: false,
+          error: 'Sem permissão para visualizar preferências dos usuários',
+        });
+        return;
+      }
+
+      const profiles = await this.profileStore.listPreferenceInsights();
+      const themeUsageMap = new Map<string, number>();
+
+      let usersWithSavedPreferences = 0;
+      let usersWithAvatar = 0;
+      let usersUsingBrazilTheme = 0;
+
+      for (const profile of profiles) {
+        const theme = profile.preferencesSnapshot?.theme?.trim() ?? '';
+
+        if (profile.preferencesSnapshot) {
+          usersWithSavedPreferences += 1;
+        }
+
+        if (profile.avatarPath) {
+          usersWithAvatar += 1;
+        }
+
+        if (theme) {
+          themeUsageMap.set(theme, (themeUsageMap.get(theme) ?? 0) + 1);
+
+          if (theme === 'brazuca' || theme === 'brazuca-dark') {
+            usersUsingBrazilTheme += 1;
+          }
+        }
+      }
+
+      const themeUsage = Array.from(themeUsageMap.entries())
+        .map(([theme, count]) => ({ theme, count }))
+        .sort((leftItem, rightItem) => rightItem.count - leftItem.count);
+
+      this.sendJson(response, 200, {
+        summary: {
+          totalUsers: profiles.length,
+          usersWithSavedPreferences,
+          usersWithAvatar,
+          usersUsingBrazilTheme,
+          mostUsedTheme: themeUsage[0]?.theme ?? null,
+          themeUsage,
+        },
+        items: profiles.map((profile) => ({
+          id: profile.id,
+          fullName: profile.fullName,
+          role: profile.role,
+          isAdmin: profile.isAdmin,
+          isActive: profile.isActive,
+          avatarPath: profile.avatarPath,
+          hasAvatar: profile.avatarPath !== null,
+          canViewPreferencesInsights: profile.canViewPreferencesInsights,
+          theme: profile.preferencesSnapshot?.theme ?? null,
+          fontSize: profile.preferencesSnapshot?.fontSize ?? null,
+          density: profile.preferencesSnapshot?.density ?? null,
+          proposalsLayout: profile.preferencesSnapshot?.proposalsLayout ?? null,
+          chatWallpaper: profile.preferencesSnapshot?.chatWallpaper ?? null,
+          enterBehavior: profile.preferencesSnapshot?.enterBehavior ?? null,
+          notificationsSound:
+            typeof profile.preferencesSnapshot?.notifications?.sound === 'boolean'
+              ? profile.preferencesSnapshot.notifications.sound
+              : null,
+          isBrazilTheme:
+            profile.preferencesSnapshot?.theme === 'brazuca' ||
+            profile.preferencesSnapshot?.theme === 'brazuca-dark',
+          preferencesUpdatedAt: profile.preferencesUpdatedAt,
+          updatedAt: profile.updatedAt,
+        })),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao buscar insights de preferências', {
+        error: message,
+        userId,
       });
       this.sendJson(response, 500, { ok: false, error: message });
     }
