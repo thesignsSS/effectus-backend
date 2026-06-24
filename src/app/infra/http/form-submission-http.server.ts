@@ -20,6 +20,7 @@ import {
   AssistantChatMessage,
   EffectusAssistantService,
 } from '../../services/effectus-assistant.service.js';
+import { GmailSmtpEmailService } from '../../services/gmail-smtp-email.service.js';
 import { WhatsAppService } from '../../services/whatsapp.service.js';
 import { ChatRealtimeGateway } from './chat-realtime.gateway.js';
 import { WebQrCodePresenter } from '../qrcode/web-qr-code.presenter.js';
@@ -43,6 +44,18 @@ export interface FormSubmissionHttpServerConfig {
 
 type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
 type JsonObject = { [key: string]: JsonValue };
+type EmailAttachmentInput =
+  | {
+      type: 'proposal_document';
+      documentId: string;
+      filename?: string;
+    }
+  | {
+      type: 'uploaded_file';
+      filename: string;
+      contentType?: string;
+      base64Content: string;
+    };
 
 export class FormSubmissionHttpServer {
   private server?: http.Server;
@@ -59,6 +72,7 @@ export class FormSubmissionHttpServer {
     private readonly chatRealtimeGateway: ChatRealtimeGateway,
     private readonly whatsAppService: WhatsAppService,
     private readonly webQrCodePresenter: WebQrCodePresenter,
+    private readonly gmailSmtpEmailService: GmailSmtpEmailService,
     private readonly logger: Logger,
   ) {}
 
@@ -314,6 +328,14 @@ export class FormSubmissionHttpServer {
       requestUrl.pathname.match(/^\/api\/proposals\/[^/]+\/documents\/[^/]+$/)
     ) {
       await this.handleDeleteProposalDocument(requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'POST' &&
+      requestUrl.pathname.match(/^\/api\/proposals\/[^/]+\/income-validation-test-email$/)
+    ) {
+      await this.handleSendIncomeValidationTestEmail(request, requestUrl, response);
       return;
     }
 
@@ -1475,6 +1497,122 @@ export class FormSubmissionHttpServer {
     }
   }
 
+  private async handleSendIncomeValidationTestEmail(
+    request: IncomingMessage,
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    let brokerUserId: string | undefined;
+    let proposalId: string | undefined;
+
+    try {
+      const payload = await this.readJsonBody(request);
+      brokerUserId = readRequiredString(payload, 'brokerUserId', 'corretorUserId');
+      proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
+      const to = readRequiredEmailRecipients(payload.to ?? payload.destinatario);
+      const subject = readRequiredString(payload, 'subject', 'assunto');
+      const text = readRequiredString(payload, 'text', 'mensagem');
+      const html = readOptionalString(payload, 'html', 'corpoHtml');
+      const attachments = readEmailAttachments(payload.attachments);
+
+      const profile = await this.profileStore.getById(brokerUserId);
+
+      if (!profile) {
+        this.sendJson(response, 404, { ok: false, error: 'Usuário não encontrado' });
+        return;
+      }
+
+      if (!profile.isAdmin) {
+        this.sendJson(response, 403, {
+          ok: false,
+          error: 'Apenas administradores podem enviar este e-mail.',
+        });
+        return;
+      }
+
+      const proposal = await this.proposalStore.getById({
+        brokerUserId,
+        proposalId,
+      });
+
+      if (!proposal) {
+        this.sendJson(response, 404, { ok: false, error: 'Proposta não encontrada' });
+        return;
+      }
+
+      const resolvedAttachments = [];
+
+      for (const attachment of attachments) {
+        if (attachment.type === 'proposal_document') {
+          const document = await this.proposalStore.getDocument({
+            brokerUserId,
+            proposalId,
+            documentId: attachment.documentId,
+          });
+
+          if (!document) {
+            throw new Error(`Documento da proposta não encontrado: ${attachment.documentId}`);
+          }
+
+          const content = await this.storageService.download(document.storageLocation);
+          resolvedAttachments.push({
+            filename: attachment.filename?.trim() || document.originalFilename,
+            content,
+            contentType: document.contentType,
+          });
+          continue;
+        }
+
+        resolvedAttachments.push({
+          filename: attachment.filename,
+          content: Buffer.from(attachment.base64Content, 'base64'),
+          contentType: attachment.contentType,
+        });
+      }
+
+      this.logger.info('Iniciando envio de e-mail da validação de renda', {
+        proposalId,
+        brokerUserId,
+        recipients: to,
+        subject,
+        attachmentsCount: resolvedAttachments.length,
+      });
+
+      await this.gmailSmtpEmailService.send({
+        to,
+        subject,
+        text,
+        html,
+        attachments: resolvedAttachments,
+      });
+
+      await this.proposalStore.appendAuditComment({
+        proposalId,
+        actorUserId: brokerUserId,
+        actorRole: profile.role,
+        actorName: profile.fullName,
+        message: `E-mail da validação de renda enviado para ${to.map((recipient) => `"${recipient}"`).join(', ')} com assunto "${subject}".`,
+      });
+
+      this.logger.info('E-mail da validação de renda enviado com sucesso', {
+        proposalId,
+        brokerUserId,
+        recipients: to,
+        subject,
+      });
+
+      this.sendJson(response, 200, { ok: true, sentTo: to });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao enviar e-mail teste da validação de renda', {
+        error: message,
+        proposalId,
+        brokerUserId,
+      });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
+    }
+  }
+
   private async runProposalUpdateEffects(
     effects: ProposalUpdateEffects,
     statusLabel?: string,
@@ -2028,6 +2166,72 @@ function readOptionalString(
   }
 
   return value.trim();
+}
+
+function readEmailAttachments(value: JsonValue | undefined): EmailAttachmentInput[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const attachments: EmailAttachmentInput[] = [];
+
+  value.forEach((item) => {
+    if (!isJsonObject(item) || typeof item.type !== 'string') {
+      return;
+    }
+
+    if (item.type === 'proposal_document' && typeof item.documentId === 'string') {
+      attachments.push({
+        type: 'proposal_document',
+        documentId: item.documentId.trim(),
+        filename: typeof item.filename === 'string' ? item.filename.trim() : undefined,
+      });
+      return;
+    }
+
+    if (
+      item.type === 'uploaded_file' &&
+      typeof item.filename === 'string' &&
+      typeof item.base64Content === 'string'
+    ) {
+      attachments.push({
+        type: 'uploaded_file',
+        filename: item.filename.trim(),
+        contentType:
+          typeof item.contentType === 'string' ? item.contentType.trim() : undefined,
+        base64Content: item.base64Content.trim(),
+      });
+    }
+  });
+
+  return attachments;
+}
+
+function readRequiredEmailRecipients(value: JsonValue | undefined): string[] {
+  const recipients = Array.isArray(value)
+    ? value
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim())
+        .filter(Boolean)
+    : typeof value === 'string' && value.trim()
+    ? [value.trim()]
+    : [];
+
+  if (recipients.length === 0) {
+    throw new Error('Informe ao menos um destinatário válido.');
+  }
+
+  recipients.forEach((recipient) => {
+    if (!isValidEmail(recipient)) {
+      throw new Error(`Destinatário inválido: ${recipient}`);
+    }
+  });
+
+  return recipients;
+}
+
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
 function readOptionalObject(

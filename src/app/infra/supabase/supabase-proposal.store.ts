@@ -223,6 +223,10 @@ export class SupabaseProposalStore implements ProposalStore {
     const trimmedPendingReason = input.pendingReason?.trim() ?? '';
     const trimmedCommentMessage = input.commentMessage?.trim() ?? '';
     const updatedFieldChanges = collectUpdatedFieldChanges(currentProposal, input);
+    const incomeValidationAuditMessage = resolveIncomeValidationAuditMessage(
+      currentProposal.form_data,
+      input.formData,
+    );
     let commentAdded = false;
     let resubmittedForAnalysis = false;
 
@@ -273,6 +277,18 @@ export class SupabaseProposalStore implements ProposalStore {
       }
 
       payload.status = nextStatus;
+
+      if (nextStatus !== currentStatus) {
+        nextComments.push(
+          buildProposalComment({
+            authorName: getAccessDisplayName(access),
+            authorUserId: input.brokerUserId,
+            authorRole: access.role,
+            message: `Etapa da proposta alterada: de "${toStatusInfo(currentStatus).statusLabel}" para "${toStatusInfo(nextStatus).statusLabel}".`,
+            type: 'audit',
+          }),
+        );
+      }
     }
 
     if (trimmedCommentMessage) {
@@ -303,6 +319,18 @@ export class SupabaseProposalStore implements ProposalStore {
           authorUserId: input.brokerUserId,
           authorRole: access.role,
           message: buildProposalAuditMessage(updatedFieldChanges),
+          type: 'audit',
+        }),
+      );
+    }
+
+    if (incomeValidationAuditMessage) {
+      nextComments.push(
+        buildProposalComment({
+          authorName: getAccessDisplayName(access),
+          authorUserId: input.brokerUserId,
+          authorRole: access.role,
+          message: incomeValidationAuditMessage,
           type: 'audit',
         }),
       );
@@ -1558,6 +1586,24 @@ export class SupabaseProposalStore implements ProposalStore {
     }
   }
 
+  async appendAuditComment(input: {
+    proposalId: string;
+    actorUserId: string;
+    actorRole: UserRole;
+    actorName: string;
+    message: string;
+  }): Promise<void> {
+    await this.appendProposalAuditComment(
+      input.proposalId,
+      input.actorUserId,
+      {
+        role: input.actorRole,
+        fullName: input.actorName,
+      },
+      input.message,
+    );
+  }
+
   private async toProposalInvitations(
     rows: ProposalInvitationRow[],
   ): Promise<ProposalInvitation[]> {
@@ -2056,6 +2102,52 @@ function buildProposalAuditMessage(updatedFieldChanges: ProposalFieldChange[]): 
         `${capitalize(change.label)}: de "${change.previousValue}" para "${change.nextValue}".`,
     )
     .join('\n');
+}
+
+function resolveIncomeValidationAuditMessage(
+  currentFormData: Record<string, unknown> | null | undefined,
+  nextFormData: Record<string, unknown> | undefined,
+): string | null {
+  if (!nextFormData) {
+    return null;
+  }
+
+  const currentIncomeValidationData = normalizeIncomeValidationAuditValue(
+    currentFormData?.validacao_renda,
+  );
+  const nextIncomeValidationData = normalizeIncomeValidationAuditValue(
+    nextFormData.validacao_renda,
+  );
+
+  if (nextIncomeValidationData === null) {
+    return null;
+  }
+
+  if (
+    currentIncomeValidationData !== null &&
+    JSON.stringify(currentIncomeValidationData) === JSON.stringify(nextIncomeValidationData)
+  ) {
+    return null;
+  }
+
+  const wasFinalized = currentIncomeValidationData?.finalized === true;
+  const isFinalized = nextIncomeValidationData?.finalized === true;
+
+  if (!wasFinalized && isFinalized) {
+    return 'Validação de renda finalizada.';
+  }
+
+  return 'Validação de renda atualizada.';
+}
+
+function normalizeIncomeValidationAuditValue(
+  value: unknown,
+): { finalized?: boolean } & Record<string, unknown> | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  return value as { finalized?: boolean } & Record<string, unknown>;
 }
 
 function normalizeValue(value: unknown): string {

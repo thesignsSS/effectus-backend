@@ -1,3 +1,5 @@
+import type { UserRole } from './profile-store.interface.js';
+
 export interface ProposalDocumentInput {
   filename: string;
   originalFilename: string;
@@ -266,6 +268,13 @@ export interface ProposalListResult {
 export interface ProposalStore {
   create(input: CreateProposalInput): Promise<{ id: string; proposalCode: string } & ProposalStatusInfo>;
   update(input: UpdateProposalInput): Promise<(ProposalStatusInfo & { effects?: ProposalUpdateEffects }) | undefined>;
+  appendAuditComment(input: {
+    proposalId: string;
+    actorUserId: string;
+    actorRole: UserRole;
+    actorName: string;
+    message: string;
+  }): Promise<void>;
   countPendingByBroker(input: {
     brokerUserId: string;
   }): Promise<number>;

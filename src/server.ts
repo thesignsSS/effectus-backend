@@ -24,6 +24,7 @@ import { BaileysClient } from './app/infra/whatsapp/baileys.client.js';
 import { DocumentProcessingQueueService } from './app/services/document-processing-queue.service.js';
 import { EffectusAssistantService } from './app/services/effectus-assistant.service.js';
 import { FileService } from './app/services/file.service.js';
+import { GmailSmtpEmailService } from './app/services/gmail-smtp-email.service.js';
 import { ChatService } from './app/services/chat.service.js';
 import { NotificationService } from './app/services/notification.service.js';
 import { RemittanceSessionService } from './app/services/remittance-session.service.js';
@@ -122,6 +123,10 @@ export function buildApp(): WhatsAppController {
   });
   const notificationService = new NotificationService(notificationStore);
   const chatService = new ChatService(chatStore, notificationService);
+  const gmailSmtpEmailService = new GmailSmtpEmailService({
+    user: env.gmailSmtpUser,
+    appPassword: env.gmailSmtpAppPassword,
+  });
   const chatRealtimeGateway = new ChatRealtimeGateway(
     {
       apiKey: env.formSubmissionApiKey,
@@ -160,6 +165,7 @@ export function buildApp(): WhatsAppController {
     chatRealtimeGateway,
     whatsAppService,
     webQrCodePresenter,
+    gmailSmtpEmailService,
     logger,
   ).start();
   const remittanceSessionService = new RemittanceSessionService();

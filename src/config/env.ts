@@ -35,6 +35,8 @@ export interface Env {
   openRouterApiKey?: string;
   openRouterModel: string;
   openRouterBaseUrl: string;
+  gmailSmtpUser?: string;
+  gmailSmtpAppPassword?: string;
   tempDir: string;
 }
 
@@ -78,5 +80,7 @@ export const env: Env = {
     process.env.OPENROUTER_MODEL ?? 'google/gemini-2.5-flash',
   openRouterBaseUrl:
     process.env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1',
+  gmailSmtpUser: process.env.GMAIL_SMTP_USER,
+  gmailSmtpAppPassword: process.env.GMAIL_SMTP_APP_PASSWORD,
   tempDir: process.env.TEMP_DIR ?? 'tmp/uploads',
 };
