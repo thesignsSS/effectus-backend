@@ -30,7 +30,8 @@ export type ProposalStatus =
   | 'pendente'
   | 'condicionado'
   | 'reprovado'
-  | 'aprovado';
+  | 'aprovado'
+  | 'validacao_renda';
 
 export interface ProposalStatusInfo {
   status: ProposalStatus;
@@ -64,6 +65,7 @@ export const PROPOSAL_STATUS_OPTIONS: ProposalStatusOption[] = [
   { value: 'condicionado', label: 'Condicionado' },
   { value: 'reprovado', label: 'Reprovado' },
   { value: 'aprovado', label: 'Aprovado' },
+  { value: 'validacao_renda', label: 'Validação de Renda' },
 ];
 
 export interface CreateProposalInput {

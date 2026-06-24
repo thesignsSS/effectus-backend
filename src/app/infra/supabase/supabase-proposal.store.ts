@@ -99,6 +99,30 @@ type ResolvedProposalAccess = {
   isCollaborator: boolean;
 };
 
+type IncomeValidationData = {
+  finalized?: boolean;
+};
+
+type ProposalUpdateContextRow = Pick<
+  ProposalRow,
+  | 'status'
+  | 'proposal_comments'
+  | 'broker_name'
+  | 'broker_phone'
+  | 'client_name'
+  | 'client_cpf'
+  | 'client_email'
+  | 'client_phone'
+  | 'property_type'
+  | 'property_city'
+  | 'property_state'
+  | 'additional_info'
+  | 'form_data'
+> & {
+  proposalCode: string;
+  broker_user_id: string;
+};
+
 export class SupabaseProposalStore implements ProposalStore {
   private readonly client: SupabaseClient;
 
@@ -193,6 +217,7 @@ export class SupabaseProposalStore implements ProposalStore {
     }
 
     const currentStatus = toStatusInfo(currentProposal.status).status;
+    this.assertBrokerCanModifyProposal(access, currentStatus, currentProposal, input);
     const nextStatus = input.status;
     const nextComments = normalizeProposalComments(currentProposal.proposal_comments);
     const trimmedPendingReason = input.pendingReason?.trim() ?? '';
@@ -225,22 +250,26 @@ export class SupabaseProposalStore implements ProposalStore {
         }
       } else {
         const canResubmit = currentStatus === 'pendente' && nextStatus === 'em_analise';
+        const canAdvanceToIncomeValidation =
+          currentStatus === 'aprovado' && nextStatus === 'validacao_renda';
 
-        if (!canResubmit) {
+        if (!canResubmit && !canAdvanceToIncomeValidation) {
           throw new Error('Apenas admin pode alterar o status da proposta');
         }
 
-        payload.pending_reason = null;
-        nextComments.push(
-          buildProposalComment({
-            authorName: getAccessDisplayName(access),
-            authorUserId: input.brokerUserId,
-            authorRole: access.role,
-            message: trimmedCommentMessage || 'Proposta reenviada para análise.',
-            type: 'resubmission',
-          }),
-        );
-        resubmittedForAnalysis = true;
+        if (canResubmit) {
+          payload.pending_reason = null;
+          nextComments.push(
+            buildProposalComment({
+              authorName: getAccessDisplayName(access),
+              authorUserId: input.brokerUserId,
+              authorRole: access.role,
+              message: trimmedCommentMessage || 'Proposta reenviada para análise.',
+              type: 'resubmission',
+            }),
+          );
+          resubmittedForAnalysis = true;
+        }
       }
 
       payload.status = nextStatus;
@@ -578,9 +607,24 @@ export class SupabaseProposalStore implements ProposalStore {
   async renameDocument(input: RenameProposalDocumentInput): Promise<void> {
     const access = await this.resolveAccess(input.brokerUserId);
     const document = await this.getDocument(input);
+    const proposal = await this.getProposalForUpdate(input.proposalId);
     if (!document) {
       throw new Error('Documento da proposta não encontrado');
     }
+    if (!proposal) {
+      throw new Error('Proposta não encontrada');
+    }
+
+    this.assertBrokerCanModifyProposal(
+      access,
+      toStatusInfo(proposal.status).status,
+      proposal,
+      {
+        proposalId: input.proposalId,
+        brokerUserId: input.brokerUserId,
+        formData: undefined,
+      },
+    );
 
     const { error } = await this.client
       .from('proposal_documents')
@@ -607,9 +651,24 @@ export class SupabaseProposalStore implements ProposalStore {
   ): Promise<ProposalDocumentLookup | null> {
     const access = await this.resolveAccess(input.brokerUserId);
     const document = await this.getDocument(input);
+    const proposal = await this.getProposalForUpdate(input.proposalId);
     if (!document) {
       return null;
     }
+    if (!proposal) {
+      throw new Error('Proposta não encontrada');
+    }
+
+    this.assertBrokerCanModifyProposal(
+      access,
+      toStatusInfo(proposal.status).status,
+      proposal,
+      {
+        proposalId: input.proposalId,
+        brokerUserId: input.brokerUserId,
+        formData: undefined,
+      },
+    );
 
     const { error } = await this.client
       .from('proposal_documents')
@@ -634,10 +693,26 @@ export class SupabaseProposalStore implements ProposalStore {
   async delete(input: DeleteProposalInput): Promise<DeleteProposalResult | null> {
     const access = await this.resolveAccess(input.brokerUserId);
     const proposalAccess = await this.resolveProposalAccess(input.proposalId, input.brokerUserId);
+    const proposalForUpdate = await this.getProposalForUpdate(input.proposalId);
 
     if (!proposalAccess || (!access.isAdmin && !proposalAccess.isOwner)) {
       return null;
     }
+    if (!proposalForUpdate) {
+      return null;
+    }
+
+    this.assertBrokerCanModifyProposal(
+      access,
+      toStatusInfo(proposalForUpdate.status).status,
+      proposalForUpdate,
+      {
+        proposalId: input.proposalId,
+        brokerUserId: input.brokerUserId,
+        formData: undefined,
+      },
+      true,
+    );
 
     let query = this.client
       .from('proposals')
@@ -697,10 +772,23 @@ export class SupabaseProposalStore implements ProposalStore {
       brokerUserId: input.brokerUserId,
       proposalId: input.proposalId,
     });
+    const proposalForUpdate = await this.getProposalForUpdate(input.proposalId);
 
-    if (!proposal) {
+    if (!proposal || !proposalForUpdate) {
       throw new Error('Proposta não encontrada');
     }
+
+    this.assertBrokerCanModifyProposal(
+      access,
+      toStatusInfo(proposalForUpdate.status).status,
+      proposalForUpdate,
+      {
+        proposalId: input.proposalId,
+        brokerUserId: input.brokerUserId,
+        formData: undefined,
+      },
+      true,
+    );
 
     const { error } = await this.client.from('proposal_documents').insert(
       input.documents.map((document) => ({
@@ -771,10 +859,26 @@ export class SupabaseProposalStore implements ProposalStore {
   }): Promise<ProposalShareLink> {
     const access = await this.resolveAccess(input.brokerUserId);
     const proposalAccess = await this.resolveProposalAccess(input.proposalId, input.brokerUserId);
+    const proposal = await this.getProposalForUpdate(input.proposalId);
 
     if (!proposalAccess || (!access.isAdmin && !proposalAccess.isOwner)) {
       throw new Error('Proposta não encontrada');
     }
+    if (!proposal) {
+      throw new Error('Proposta não encontrada');
+    }
+
+    this.assertBrokerCanModifyProposal(
+      access,
+      toStatusInfo(proposal.status).status,
+      proposal,
+      {
+        proposalId: input.proposalId,
+        brokerUserId: input.brokerUserId,
+        formData: undefined,
+      },
+      true,
+    );
 
     const existingShareLink = await this.getShareLinkByProposalId(input.proposalId);
 
@@ -817,10 +921,25 @@ export class SupabaseProposalStore implements ProposalStore {
   }): Promise<ProposalInvitation> {
     const access = await this.resolveAccess(input.brokerUserId);
     const proposalAccess = await this.resolveProposalAccess(input.proposalId, input.brokerUserId);
+    const proposal = await this.getProposalForUpdate(input.proposalId);
 
     if (!proposalAccess || (!access.isAdmin && !proposalAccess.isOwner)) {
       throw new Error('Proposta não encontrada');
     }
+    if (!proposal) {
+      throw new Error('Proposta não encontrada');
+    }
+
+    this.assertBrokerCanModifyProposal(
+      access,
+      toStatusInfo(proposal.status).status,
+      proposal,
+      {
+        proposalId: input.proposalId,
+        brokerUserId: input.brokerUserId,
+        formData: undefined,
+      },
+    );
 
     if (proposalAccess.ownerBrokerUserId === input.inviteeUserId) {
       throw new Error('O dono da proposta não pode ser convidado');
@@ -1040,10 +1159,25 @@ export class SupabaseProposalStore implements ProposalStore {
   }): Promise<boolean> {
     const access = await this.resolveAccess(input.brokerUserId);
     const proposalAccess = await this.resolveProposalAccess(input.proposalId, input.brokerUserId);
+    const proposal = await this.getProposalForUpdate(input.proposalId);
 
     if (!proposalAccess || (!access.isAdmin && !proposalAccess.isOwner)) {
       throw new Error('Proposta não encontrada');
     }
+    if (!proposal) {
+      throw new Error('Proposta não encontrada');
+    }
+
+    this.assertBrokerCanModifyProposal(
+      access,
+      toStatusInfo(proposal.status).status,
+      proposal,
+      {
+        proposalId: input.proposalId,
+        brokerUserId: input.brokerUserId,
+        formData: undefined,
+      },
+    );
 
     if (proposalAccess.ownerBrokerUserId === input.guestUserId) {
       throw new Error('Não é possível remover o dono da proposta');
@@ -1099,17 +1233,29 @@ export class SupabaseProposalStore implements ProposalStore {
     const status = toStatusInfo(row.status);
     const documents = row.proposal_documents ?? [];
     const normalizedComments = normalizeProposalComments(row.proposal_comments);
-    const uploaderNames = await this.getProfileNamesByIds(
-      Array.from(
-        new Set(
-          documents.map((document) => document.uploaded_by_user_id ?? row.broker_user_id),
-        ),
+    const uploaderUserIds = Array.from(
+      new Set(
+        documents.map((document) => document.uploaded_by_user_id ?? row.broker_user_id),
       ),
     );
-    const authorAvatarPaths = await this.getProfileAvatarPathsByIds([
+    const authorUserIds = [
       row.broker_user_id,
       ...normalizedComments.map((comment) => comment.authorUserId ?? '').filter(Boolean),
-    ]);
+    ];
+    const [uploaderNames, authorAvatarPaths, guests, shareLink, pendingInvitations] =
+      await Promise.all([
+        this.getProfileNamesByIds(uploaderUserIds),
+        this.getProfileAvatarPathsByIds(authorUserIds),
+        proposalAccess.isOwner || proposalAccess.isAdmin
+          ? this.listProposalGuests(row.id)
+          : Promise.resolve([]),
+        proposalAccess.isOwner || proposalAccess.isAdmin
+          ? this.getShareLinkByProposalId(row.id)
+          : Promise.resolve(null),
+        proposalAccess.isOwner || proposalAccess.isAdmin
+          ? this.listProposalInvitationsByProposal(row.id, 'pending')
+          : Promise.resolve([]),
+      ]);
 
     return {
       id: row.id,
@@ -1120,7 +1266,9 @@ export class SupabaseProposalStore implements ProposalStore {
       ownerAvatarPath: authorAvatarPaths.get(row.broker_user_id) ?? null,
       isOwnedByCurrentUser: proposalAccess.isOwner,
       isSharedWithCurrentUser: proposalAccess.isCollaborator,
-      canDeleteProposal: proposalAccess.isOwner || proposalAccess.isAdmin,
+      canDeleteProposal:
+        proposalAccess.isAdmin ||
+        (proposalAccess.isOwner && !this.isBrokerReadOnlyStatus(status.status)),
       brokerName: row.broker_name ?? '',
       brokerPhone: row.broker_phone ?? '',
       createdAt: row.created_at,
@@ -1165,15 +1313,9 @@ export class SupabaseProposalStore implements ProposalStore {
           storageLocation: document.storage_location,
         };
       }),
-      guests: proposalAccess.isOwner || proposalAccess.isAdmin
-        ? await this.listProposalGuests(row.id)
-        : [],
-      shareLinkToken: proposalAccess.isOwner || proposalAccess.isAdmin
-        ? (await this.getShareLinkByProposalId(row.id))?.token ?? null
-        : null,
-      pendingInvitations: proposalAccess.isOwner || proposalAccess.isAdmin
-        ? await this.listProposalInvitationsByProposal(row.id, 'pending')
-        : [],
+      guests,
+      shareLinkToken: shareLink?.token ?? null,
+      pendingInvitations,
     };
   }
 
@@ -1210,6 +1352,152 @@ export class SupabaseProposalStore implements ProposalStore {
         (profile) => [profile.id, profile.full_name ?? ''],
       ),
     );
+  }
+
+  private isBrokerReadOnlyStatus(status: ProposalStatus): boolean {
+    return status === 'aprovado' || status === 'validacao_renda';
+  }
+
+  private extractIncomeValidationData(
+    formData: Record<string, unknown> | null | undefined,
+  ): IncomeValidationData | null {
+    const rawValue = formData?.validacao_renda;
+
+    if (!rawValue || typeof rawValue !== 'object') {
+      return null;
+    }
+
+    return rawValue as IncomeValidationData;
+  }
+
+  private isIncomeValidationFinalized(
+    formData: Record<string, unknown> | null | undefined,
+  ): boolean {
+    return this.extractIncomeValidationData(formData)?.finalized === true;
+  }
+
+  private isIncomeValidationOnlyUpdate(
+    currentProposal: ProposalUpdateContextRow,
+    input: UpdateProposalInput,
+  ): boolean {
+    if (!input.formData) {
+      return false;
+    }
+
+    if (
+      input.status !== undefined ||
+      input.pendingReason !== undefined ||
+      input.commentMessage !== undefined
+    ) {
+      return false;
+    }
+
+    const unchangedScalarFields =
+      (input.brokerPhone === undefined || input.brokerPhone === (currentProposal.broker_phone ?? '')) &&
+      (input.clientName === undefined || input.clientName === (currentProposal.client_name ?? '')) &&
+      (input.clientCpf === undefined || input.clientCpf === (currentProposal.client_cpf ?? '')) &&
+      (input.clientEmail === undefined || input.clientEmail === (currentProposal.client_email ?? '')) &&
+      (input.clientPhone === undefined || input.clientPhone === (currentProposal.client_phone ?? '')) &&
+      (input.propertyType === undefined || input.propertyType === (currentProposal.property_type ?? '')) &&
+      (input.propertyCity === undefined || input.propertyCity === (currentProposal.property_city ?? '')) &&
+      (input.propertyState === undefined || input.propertyState === (currentProposal.property_state ?? '')) &&
+      (input.additionalInfo === undefined || input.additionalInfo === (currentProposal.additional_info ?? ''));
+
+    if (!unchangedScalarFields) {
+      return false;
+    }
+
+    const currentFormData = currentProposal.form_data ?? {};
+    const nextFormData = input.formData ?? {};
+
+    const currentWithoutIncomeValidation = { ...currentFormData };
+    const nextWithoutIncomeValidation = { ...nextFormData };
+
+    delete currentWithoutIncomeValidation.validacao_renda;
+    delete nextWithoutIncomeValidation.validacao_renda;
+
+    return JSON.stringify(currentWithoutIncomeValidation) === JSON.stringify(nextWithoutIncomeValidation);
+  }
+
+  private isApprovalToIncomeValidationTransitionOnly(
+    status: ProposalStatus,
+    input: Pick<
+      UpdateProposalInput,
+      | 'brokerPhone'
+      | 'clientName'
+      | 'clientCpf'
+      | 'clientEmail'
+      | 'clientPhone'
+      | 'propertyType'
+      | 'propertyCity'
+      | 'propertyState'
+      | 'additionalInfo'
+      | 'formData'
+      | 'status'
+      | 'pendingReason'
+      | 'commentMessage'
+    >,
+  ): boolean {
+    if (status !== 'aprovado' || input.status !== 'validacao_renda') {
+      return false;
+    }
+
+    return (
+      input.brokerPhone === undefined &&
+      input.clientName === undefined &&
+      input.clientCpf === undefined &&
+      input.clientEmail === undefined &&
+      input.clientPhone === undefined &&
+      input.propertyType === undefined &&
+      input.propertyCity === undefined &&
+      input.propertyState === undefined &&
+      input.additionalInfo === undefined &&
+      input.formData === undefined &&
+      input.pendingReason === undefined &&
+      input.commentMessage === undefined
+    );
+  }
+
+  private assertBrokerCanModifyProposal(
+    access: { isAdmin: boolean },
+    status: ProposalStatus,
+    currentProposal: ProposalUpdateContextRow,
+    input: Pick<
+      UpdateProposalInput,
+      | 'proposalId'
+      | 'brokerUserId'
+      | 'brokerPhone'
+      | 'clientName'
+      | 'clientCpf'
+      | 'clientEmail'
+      | 'clientPhone'
+      | 'propertyType'
+      | 'propertyCity'
+      | 'propertyState'
+      | 'additionalInfo'
+      | 'formData'
+      | 'status'
+      | 'pendingReason'
+      | 'commentMessage'
+    >,
+    allowIncomeValidationDocuments = false,
+  ): void {
+    if (access.isAdmin || !this.isBrokerReadOnlyStatus(status)) {
+      return;
+    }
+
+    if (this.isApprovalToIncomeValidationTransitionOnly(status, input)) {
+      return;
+    }
+
+    const isIncomeValidationEditable =
+      !this.isIncomeValidationFinalized(currentProposal.form_data) &&
+      (allowIncomeValidationDocuments ||
+        this.isIncomeValidationOnlyUpdate(currentProposal, input));
+
+    if (!isIncomeValidationEditable) {
+      throw new Error('Após aprovação, apenas administradores podem alterar a proposta.');
+    }
   }
 
   private async getProfileAvatarPathsByIds(userIds: string[]): Promise<Map<string, string | null>> {
@@ -1534,12 +1822,15 @@ export class SupabaseProposalStore implements ProposalStore {
     proposalId: string,
     userId: string,
   ): Promise<ResolvedProposalAccess | null> {
-    const access = await this.resolveAccess(userId);
-    const { data, error } = await this.client
-      .from('proposals')
-      .select('id, broker_user_id, broker_name')
-      .eq('id', proposalId)
-      .single();
+    const [access, proposalResult] = await Promise.all([
+      this.resolveAccess(userId),
+      this.client
+        .from('proposals')
+        .select('id, broker_user_id, broker_name')
+        .eq('id', proposalId)
+        .single(),
+    ]);
+    const { data, error } = proposalResult;
 
     if (error) {
       if (error.code === 'PGRST116') {
@@ -1570,25 +1861,7 @@ export class SupabaseProposalStore implements ProposalStore {
 
   private async getProposalForUpdate(
     proposalId: string,
-  ): Promise<(Pick<
-    ProposalRow,
-    | 'status'
-    | 'proposal_comments'
-    | 'broker_name'
-    | 'broker_phone'
-    | 'client_name'
-    | 'client_cpf'
-    | 'client_email'
-    | 'client_phone'
-    | 'property_type'
-    | 'property_city'
-    | 'property_state'
-    | 'additional_info'
-    | 'form_data'
-  > & {
-    proposalCode: string;
-    broker_user_id: string;
-  }) | null> {
+  ): Promise<ProposalUpdateContextRow | null> {
     let query = this.client
       .from('proposals')
       .select('status, proposal_comments, broker_name, broker_phone, broker_user_id, proposal_number, client_name, client_cpf, client_email, client_phone, property_type, property_city, property_state, additional_info, form_data')

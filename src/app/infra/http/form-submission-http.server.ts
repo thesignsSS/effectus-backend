@@ -1419,12 +1419,15 @@ export class FormSubmissionHttpServer {
     requestUrl: URL,
     response: ServerResponse,
   ): Promise<void> {
-    const payload = await this.readJsonBody(request);
-    const brokerUserId = readRequiredString(payload, 'brokerUserId', 'corretorUserId');
-    const proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
-    const status = readOptionalProposalStatus(payload);
+    let brokerUserId: string | undefined;
+    let proposalId: string | undefined;
 
     try {
+      const payload = await this.readJsonBody(request);
+      brokerUserId = readRequiredString(payload, 'brokerUserId', 'corretorUserId');
+      proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
+      const status = readOptionalProposalStatus(payload);
+
       const result = await this.proposalStore.update({
         proposalId,
         brokerUserId,
@@ -2178,8 +2181,13 @@ function readOptionalProposalStatus(payload: JsonObject): ProposalStatus | undef
     .replace(/[_-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  const compactStatus = rawStatus.replace(/\s+/g, '');
 
-  if (rawStatus === 'em analise' || rawStatus === 'em_analise') {
+  if (
+    rawStatus === 'em analise' ||
+    rawStatus === 'em_analise' ||
+    compactStatus === 'emanalise'
+  ) {
     return 'em_analise';
   }
 
@@ -2199,6 +2207,15 @@ function readOptionalProposalStatus(payload: JsonObject): ProposalStatus | undef
     return 'aprovado';
   }
 
+  if (
+    rawStatus === 'validacao_renda' ||
+    rawStatus === 'validacao de renda' ||
+    rawStatus === 'validação de renda' ||
+    compactStatus === 'validacaorenda'
+  ) {
+    return 'validacao_renda';
+  }
+
   if (rawStatus === 'in progress') {
     return 'em_analise';
   }
@@ -2212,7 +2229,7 @@ function readOptionalProposalStatus(payload: JsonObject): ProposalStatus | undef
   }
 
   throw new Error(
-    'Status inválido. Use em_analise, pendente, condicionado, reprovado ou aprovado',
+    'Status inválido. Use em_analise, pendente, condicionado, reprovado, aprovado ou validacao_renda',
   );
 }
 
