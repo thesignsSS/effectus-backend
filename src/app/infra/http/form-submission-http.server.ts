@@ -1704,6 +1704,9 @@ export class FormSubmissionHttpServer {
     const brokerUserId = readRequiredString(payload, 'brokerUserId', 'corretorUserId');
     const proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
     const documents = readDocuments(payload.documents);
+    const rawDocumentScope = readOptionalString(payload, 'documentScope', 'documentScope');
+    const documentScope =
+      rawDocumentScope === 'income_validation' ? 'income_validation' : 'proposal';
 
     try {
       const proposal = await this.proposalStore.getProposalContext({
@@ -1760,6 +1763,7 @@ export class FormSubmissionHttpServer {
         brokerUserId,
         proposalId,
         documents: uploadedDocuments,
+        documentScope,
       });
 
       this.sendJson(response, 201, {

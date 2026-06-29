@@ -242,7 +242,7 @@ function sanitizePathSegment(value: string): string {
     .replace(/\s+/g, '_')
     .replace(/_+/g, '_')
     .trim()
-    .replace(/^[_\.]+|[_\.]+$/g, '');
+    .replace(/^[_.]+|[_.]+$/g, '');
 
   return sanitized || 'Sem nome';
 }

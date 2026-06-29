@@ -11,6 +11,7 @@ import {
   ProposalDetail,
   ProposalDocumentContext,
   ProposalDocumentLookup,
+  ProposalDocumentScope,
   ProposalGuest,
   ProposalInvitation,
   ProposalInvitationStatus,
@@ -70,6 +71,7 @@ type ProposalDocumentRow = {
   size_bytes: number;
   uploaded_at: string;
   uploaded_by_user_id: string | null;
+  document_scope: ProposalDocumentScope | null;
 };
 
 type ProposalShareLinkRow = {
@@ -177,6 +179,7 @@ export class SupabaseProposalStore implements ProposalStore {
           size_bytes: document.sizeBytes,
           uploaded_at: document.uploadedAt,
           uploaded_by_user_id: document.uploadedByUserId ?? input.brokerUserId,
+          document_scope: document.documentScope ?? 'proposal',
         })),
       );
 
@@ -406,7 +409,7 @@ export class SupabaseProposalStore implements ProposalStore {
     let query = this.client
       .from('proposals')
       .select(
-        'id, proposal_number, broker_user_id, status, broker_name, client_name, property_type, created_at, proposal_documents(count)',
+        'id, proposal_number, broker_user_id, status, broker_name, client_name, property_type, created_at',
         { count: 'exact' },
       )
       .order('created_at', { ascending: false })
@@ -479,10 +482,12 @@ export class SupabaseProposalStore implements ProposalStore {
     }
 
     const rows = ((data as Array<
-      Pick<ProposalRow, 'id' | 'proposal_number' | 'broker_user_id' | 'status' | 'broker_name' | 'client_name' | 'property_type' | 'created_at'> & {
-        proposal_documents?: Array<{ count: number | null }>;
-      }
+      Pick<ProposalRow, 'id' | 'proposal_number' | 'broker_user_id' | 'status' | 'broker_name' | 'client_name' | 'property_type' | 'created_at'>
     > | null) ?? []);
+    const proposalDocumentsCountByProposalId = await this.getProposalDocumentCountsByProposalIds(
+      rows.map((item) => item.id),
+      'proposal',
+    );
     const ownerAvatarPaths = await this.getProfileAvatarPathsByIds(
       rows.map((item) => item.broker_user_id),
     );
@@ -490,6 +495,7 @@ export class SupabaseProposalStore implements ProposalStore {
     const items = rows.map((item) =>
       this.toProposalListItem(
         item,
+        proposalDocumentsCountByProposalId.get(item.id) ?? 0,
         input.brokerUserId,
         sharedProposalIdsSet,
         ownerAvatarPaths.get(item.broker_user_id) ?? null,
@@ -570,7 +576,8 @@ export class SupabaseProposalStore implements ProposalStore {
           content_type,
           size_bytes,
           uploaded_at,
-          uploaded_by_user_id
+          uploaded_by_user_id,
+          document_scope
         )
       `)
       .eq('id', input.proposalId)
@@ -612,6 +619,7 @@ export class SupabaseProposalStore implements ProposalStore {
         size_bytes,
         uploaded_at,
         uploaded_by_user_id,
+        document_scope,
         proposals!inner (
           id,
           broker_user_id
@@ -794,6 +802,7 @@ export class SupabaseProposalStore implements ProposalStore {
     brokerUserId: string;
     proposalId: string;
     documents: CreateProposalInput['documents'];
+    documentScope?: ProposalDocumentScope;
   }): Promise<void> {
     const access = await this.resolveAccess(input.brokerUserId);
     const proposal = await this.getProposalContext({
@@ -828,6 +837,7 @@ export class SupabaseProposalStore implements ProposalStore {
         size_bytes: document.sizeBytes,
         uploaded_at: document.uploadedAt,
         uploaded_by_user_id: document.uploadedByUserId ?? input.brokerUserId,
+        document_scope: input.documentScope ?? document.documentScope ?? 'proposal',
       })),
     );
 
@@ -844,8 +854,12 @@ export class SupabaseProposalStore implements ProposalStore {
       input.brokerUserId,
       access,
       uploadedNames.length === 1
-        ? `Documento enviado: "${uploadedNames[0]}".`
-        : `Documentos enviados (${uploadedNames.length}): ${uploadedNames.map((name) => `"${name}"`).join(', ')}.`,
+        ? input.documentScope === 'income_validation'
+          ? `Documento enviado para validação de renda: "${uploadedNames[0]}".`
+          : `Documento enviado: "${uploadedNames[0]}".`
+        : input.documentScope === 'income_validation'
+          ? `Documentos enviados para validação de renda (${uploadedNames.length}): ${uploadedNames.map((name) => `"${name}"`).join(', ')}.`
+          : `Documentos enviados (${uploadedNames.length}): ${uploadedNames.map((name) => `"${name}"`).join(', ')}.`,
     );
   }
 
@@ -1225,9 +1239,8 @@ export class SupabaseProposalStore implements ProposalStore {
   }
 
   private toProposalListItem(
-    row: Pick<ProposalRow, 'id' | 'proposal_number' | 'broker_user_id' | 'status' | 'broker_name' | 'client_name' | 'property_type' | 'created_at'> & {
-      proposal_documents?: Array<{ count: number | null }>;
-    },
+    row: Pick<ProposalRow, 'id' | 'proposal_number' | 'broker_user_id' | 'status' | 'broker_name' | 'client_name' | 'property_type' | 'created_at'>,
+    documentsCount: number,
     currentUserId: string,
     sharedProposalIds: Set<string>,
     ownerAvatarPath: string | null,
@@ -1250,7 +1263,7 @@ export class SupabaseProposalStore implements ProposalStore {
       brokerName: row.broker_name ?? '',
       propertyType: row.property_type ?? '',
       createdAt: row.created_at,
-      documentsCount: row.proposal_documents?.[0]?.count ?? 0,
+      documentsCount,
     };
   }
 
@@ -1259,11 +1272,11 @@ export class SupabaseProposalStore implements ProposalStore {
     proposalAccess: ResolvedProposalAccess,
   ): Promise<ProposalDetail> {
     const status = toStatusInfo(row.status);
-    const documents = row.proposal_documents ?? [];
+    const allDocuments = row.proposal_documents ?? [];
     const normalizedComments = normalizeProposalComments(row.proposal_comments);
     const uploaderUserIds = Array.from(
       new Set(
-        documents.map((document) => document.uploaded_by_user_id ?? row.broker_user_id),
+        allDocuments.map((document) => document.uploaded_by_user_id ?? row.broker_user_id),
       ),
     );
     const authorUserIds = [
@@ -1284,6 +1297,37 @@ export class SupabaseProposalStore implements ProposalStore {
           ? this.listProposalInvitationsByProposal(row.id, 'pending')
           : Promise.resolve([]),
       ]);
+
+    const mapDocument = (document: ProposalDocumentRow) => {
+      const uploadedByUserId = document.uploaded_by_user_id ?? row.broker_user_id;
+      const isUploadedByProposalOwner = uploadedByUserId === row.broker_user_id;
+      const uploadedByName =
+        uploaderNames.get(uploadedByUserId)?.trim() ||
+        (isUploadedByProposalOwner ? row.broker_name ?? 'Corretor' : 'Usuário');
+
+      return {
+        id: document.id,
+        filename: document.filename,
+        originalFilename: document.original_filename,
+        displayName: document.original_filename,
+        contentType: document.content_type,
+        sizeBytes: document.size_bytes,
+        uploadedAt: document.uploaded_at,
+        uploadedByUserId,
+        uploadedByName,
+        isUploadedByProposalOwner,
+        storageLocation: document.storage_location,
+        documentScope: document.document_scope ?? 'proposal',
+      };
+    };
+    const documents = allDocuments
+      .filter((document) => (document.document_scope ?? 'proposal') === 'proposal')
+      .map(mapDocument);
+    const incomeValidationDocuments = allDocuments
+      .filter(
+        (document) => (document.document_scope ?? 'proposal') === 'income_validation',
+      )
+      .map(mapDocument);
 
     return {
       id: row.id,
@@ -1320,31 +1364,42 @@ export class SupabaseProposalStore implements ProposalStore {
           ? (authorAvatarPaths.get(comment.authorUserId) ?? null)
           : null,
       })),
-      documents: documents.map((document) => {
-        const uploadedByUserId = document.uploaded_by_user_id ?? row.broker_user_id;
-        const isUploadedByProposalOwner = uploadedByUserId === row.broker_user_id;
-        const uploadedByName =
-          uploaderNames.get(uploadedByUserId)?.trim() ||
-          (isUploadedByProposalOwner ? row.broker_name ?? 'Corretor' : 'Usuário');
-
-        return {
-          id: document.id,
-          filename: document.filename,
-          originalFilename: document.original_filename,
-          displayName: document.original_filename,
-          contentType: document.content_type,
-          sizeBytes: document.size_bytes,
-          uploadedAt: document.uploaded_at,
-          uploadedByUserId,
-          uploadedByName,
-          isUploadedByProposalOwner,
-          storageLocation: document.storage_location,
-        };
-      }),
+      documents,
+      incomeValidationDocuments,
       guests,
       shareLinkToken: shareLink?.token ?? null,
       pendingInvitations,
     };
+  }
+
+  private async getProposalDocumentCountsByProposalIds(
+    proposalIds: string[],
+    documentScope: ProposalDocumentScope,
+  ): Promise<Map<string, number>> {
+    if (proposalIds.length === 0) {
+      return new Map();
+    }
+
+    const { data, error } = await this.client
+      .from('proposal_documents')
+      .select('proposal_id')
+      .in('proposal_id', proposalIds)
+      .eq('document_scope', documentScope);
+
+    if (error) {
+      throw new Error(`Supabase proposal documents count failed: ${error.message}`);
+    }
+
+    const counts = new Map<string, number>();
+
+    ((data as Array<{ proposal_id: string }> | null) ?? []).forEach((document) => {
+      counts.set(
+        document.proposal_id,
+        (counts.get(document.proposal_id) ?? 0) + 1,
+      );
+    });
+
+    return counts;
   }
 
   private toDocumentLookup(row: ProposalDocumentRow): ProposalDocumentLookup {
@@ -1908,7 +1963,7 @@ export class SupabaseProposalStore implements ProposalStore {
   private async getProposalForUpdate(
     proposalId: string,
   ): Promise<ProposalUpdateContextRow | null> {
-    let query = this.client
+    const query = this.client
       .from('proposals')
       .select('status, proposal_comments, broker_name, broker_phone, broker_user_id, proposal_number, client_name, client_cpf, client_email, client_phone, property_type, property_city, property_state, additional_info, form_data')
       .eq('id', proposalId);
@@ -2148,10 +2203,6 @@ function normalizeIncomeValidationAuditValue(
   }
 
   return value as { finalized?: boolean } & Record<string, unknown>;
-}
-
-function normalizeValue(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
 }
 
 function appendFieldChange(

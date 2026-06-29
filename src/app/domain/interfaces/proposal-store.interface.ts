@@ -8,7 +8,10 @@ export interface ProposalDocumentInput {
   sizeBytes: number;
   uploadedAt: string;
   uploadedByUserId?: string;
+  documentScope?: ProposalDocumentScope;
 }
+
+export type ProposalDocumentScope = 'proposal' | 'income_validation';
 
 export type ProposalCommentType =
   | 'comment'
@@ -115,6 +118,7 @@ export interface ProposalDocument {
   uploadedByName: string;
   isUploadedByProposalOwner: boolean;
   storageLocation: string;
+  documentScope: ProposalDocumentScope;
 }
 
 export interface UpdateProposalInput {
@@ -253,6 +257,7 @@ export interface ProposalDetail {
   formData: Record<string, unknown>;
   comments: ProposalComment[];
   documents: ProposalDocument[];
+  incomeValidationDocuments: ProposalDocument[];
   guests: ProposalGuest[];
   shareLinkToken: string | null;
   pendingInvitations: ProposalInvitation[];
@@ -304,6 +309,7 @@ export interface ProposalStore {
     brokerUserId: string;
     proposalId: string;
     documents: ProposalDocumentInput[];
+    documentScope?: ProposalDocumentScope;
   }): Promise<void>;
   getProposalContext(input: {
     brokerUserId: string;
