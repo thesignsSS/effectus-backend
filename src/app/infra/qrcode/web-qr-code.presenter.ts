@@ -27,6 +27,11 @@ interface DashboardState {
   documents: DashboardDocument[];
 }
 
+interface DashboardConnectionState {
+  connectionStatus: WhatsAppConnectionStatus;
+  qrCode: QrCodePayload | null;
+}
+
 export class WebQrCodePresenter implements QrCodePresenter, DashboardPresenter {
   private server?: Server;
   private latestQrCode?: QrCodePayload;
@@ -121,6 +126,13 @@ export class WebQrCodePresenter implements QrCodePresenter, DashboardPresenter {
 
   async getStateSnapshot(): Promise<DashboardState> {
     return this.getState();
+  }
+
+  getConnectionStateSnapshot(): DashboardConnectionState {
+    return {
+      connectionStatus: this.connectionStatus,
+      qrCode: this.latestQrCode ?? null,
+    };
   }
 
   private async handleDocumentsRequest(response: ServerResponse): Promise<void> {

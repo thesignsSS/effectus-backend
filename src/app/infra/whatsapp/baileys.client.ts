@@ -36,6 +36,8 @@ export class BaileysClient implements MessagingProvider {
   private readonly sentMessageIds = new Set<string>();
   private persistSessionTimeout?: NodeJS.Timeout;
   private persistSessionPromise?: Promise<void>;
+  private connectPromise?: Promise<void>;
+  private isManualSessionResetInProgress = false;
 
   constructor(
     private readonly config: BaileysClientConfig,
@@ -49,6 +51,18 @@ export class BaileysClient implements MessagingProvider {
   }
 
   async connect(): Promise<void> {
+    if (this.connectPromise) {
+      return this.connectPromise;
+    }
+
+    this.connectPromise = this.connectInternal().finally(() => {
+      this.connectPromise = undefined;
+    });
+
+    return this.connectPromise;
+  }
+
+  private async connectInternal(): Promise<void> {
     await this.restoreSessionFromStoreIfNeeded();
     const { state, saveCreds } = await useMultiFileAuthState(this.config.sessionDir);
     const { version } = await fetchLatestBaileysVersion();
@@ -83,12 +97,14 @@ export class BaileysClient implements MessagingProvider {
 
       if (connection === 'close') {
         const statusCode = this.getDisconnectStatusCode(lastDisconnect?.error);
-        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+        const shouldReconnect =
+          !this.isManualSessionResetInProgress && statusCode !== DisconnectReason.loggedOut;
         this.dashboardPresenter?.updateConnectionStatus('disconnected');
 
         this.logger.warn('Conexão WhatsApp encerrada', {
           statusCode,
           shouldReconnect,
+          manualSessionResetInProgress: this.isManualSessionResetInProgress,
         });
 
         if (shouldReconnect) {
@@ -168,34 +184,40 @@ export class BaileysClient implements MessagingProvider {
       });
     }
 
+    this.isManualSessionResetInProgress = true;
+
     try {
-      this.socket?.end(new Error('Sessão encerrada manualmente'));
-    } catch (error) {
-      this.logger.warn('Falha ao encerrar socket do WhatsApp', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+      try {
+        this.socket?.end(new Error('Sessão encerrada manualmente'));
+      } catch (error) {
+        this.logger.warn('Falha ao encerrar socket do WhatsApp', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
 
-    this.socket = undefined;
-    this.groupNameCache.clear();
-    this.sentMessageIds.clear();
-    this.qrCodePresenter.clear();
-    this.dashboardPresenter?.updateConnectionStatus('disconnected');
-    this.clearPendingSessionPersistence();
+      this.socket = undefined;
+      this.groupNameCache.clear();
+      this.sentMessageIds.clear();
+      this.qrCodePresenter.clear();
+      this.dashboardPresenter?.updateConnectionStatus('disconnected');
+      this.clearPendingSessionPersistence();
 
-    await rm(this.config.sessionDir, { recursive: true, force: true }).catch((error) => {
-      this.logger.warn('Falha ao limpar diretório da sessão do WhatsApp', {
-        sessionDir: this.config.sessionDir,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-
-    if (this.config.sessionStore) {
-      await this.config.sessionStore.clear().catch((error) => {
-        this.logger.warn('Falha ao limpar backup da sessão do WhatsApp', {
+      await rm(this.config.sessionDir, { recursive: true, force: true }).catch((error) => {
+        this.logger.warn('Falha ao limpar diretório da sessão do WhatsApp', {
+          sessionDir: this.config.sessionDir,
           error: error instanceof Error ? error.message : String(error),
         });
       });
+
+      if (this.config.sessionStore) {
+        await this.config.sessionStore.clear().catch((error) => {
+          this.logger.warn('Falha ao limpar backup da sessão do WhatsApp', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+    } finally {
+      this.isManualSessionResetInProgress = false;
     }
 
     await this.connect();

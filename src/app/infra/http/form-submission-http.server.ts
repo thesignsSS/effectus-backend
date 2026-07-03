@@ -623,7 +623,7 @@ export class FormSubmissionHttpServer {
 
     try {
       await this.requireAdminUser(userId);
-      const state = await this.webQrCodePresenter.getStateSnapshot();
+      const state = this.webQrCodePresenter.getConnectionStateSnapshot();
 
       this.sendJson(response, 200, {
         ok: true,
