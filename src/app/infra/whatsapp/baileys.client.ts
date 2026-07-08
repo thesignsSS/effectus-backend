@@ -490,6 +490,7 @@ export class BaileysClient implements MessagingProvider {
     }
 
     const digits = chatId.split('@')[0]?.replace(/\D/g, '') ?? '';
+    const normalizedDirectChatId = digits ? `${digits}@s.whatsapp.net` : chatId;
     const lookup = await this.socket.onWhatsApp(chatId, digits);
     const recipient =
       lookup?.find((entry) => this.isSameWhatsAppUser(entry.jid, chatId)) ??
@@ -502,7 +503,7 @@ export class BaileysClient implements MessagingProvider {
         digits,
         lookupCount: lookup?.length ?? 0,
       });
-      return [chatId];
+      return [normalizedDirectChatId, chatId];
     }
 
     const ownDigits = this.socket.user?.id?.split('@')[0]?.replace(/\D/g, '') ?? '';
@@ -514,9 +515,10 @@ export class BaileysClient implements MessagingProvider {
     return Array.from(
       new Set(
         [
+          normalizedDirectChatId,
+          chatId,
           resolvedJid,
           normalizedResolvedJid,
-          chatId,
           isSendingToSelf ? this.socket.user?.id ?? null : null,
           isSendingToSelf ? ownDirectChatId : null,
         ].filter((value): value is string => Boolean(value)),
