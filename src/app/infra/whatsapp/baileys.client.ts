@@ -145,26 +145,42 @@ export class BaileysClient implements MessagingProvider {
       throw new Error('WhatsApp socket is not connected');
     }
 
-    let targetChatId = chatId;
-
-    if (this.isDirectChat(chatId)) {
-      targetChatId = await this.resolveDirectRecipientChatId(chatId);
-    }
+    const targetChatIds = this.isDirectChat(chatId)
+      ? await this.resolveDirectRecipientChatIds(chatId)
+      : [chatId];
 
     const messageId = `bot_${randomUUID().replace(/-/g, '')}`;
     this.sentMessageIds.add(messageId);
 
-    try {
-      await this.socket.sendMessage(targetChatId, { text }, { messageId });
-      this.logger.info('Mensagem enviada pelo WhatsApp', {
-        chatId: targetChatId,
-        originalChatId: chatId,
-        messageId,
-        directMessage: this.isDirectChat(chatId),
-      });
-    } catch (error) {
+    let lastError: unknown = null;
+
+    for (const targetChatId of targetChatIds) {
+      try {
+        await this.socket.sendMessage(targetChatId, { text }, { messageId });
+        this.logger.info('Mensagem enviada pelo WhatsApp', {
+          chatId: targetChatId,
+          originalChatId: chatId,
+          candidateChatIds: targetChatIds,
+          messageId,
+          directMessage: this.isDirectChat(chatId),
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+        this.logger.warn('Tentativa de envio pelo WhatsApp falhou', {
+          chatId: targetChatId,
+          originalChatId: chatId,
+          candidateChatIds: targetChatIds,
+          messageId,
+          directMessage: this.isDirectChat(chatId),
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (lastError) {
       this.sentMessageIds.delete(messageId);
-      throw error;
+      throw lastError;
     }
   }
 
@@ -468,7 +484,7 @@ export class BaileysClient implements MessagingProvider {
     return chatId.endsWith('@s.whatsapp.net');
   }
 
-  private async resolveDirectRecipientChatId(chatId: string): Promise<string> {
+  private async resolveDirectRecipientChatIds(chatId: string): Promise<string[]> {
     if (!this.socket) {
       throw new Error('WhatsApp socket is not connected');
     }
@@ -486,10 +502,26 @@ export class BaileysClient implements MessagingProvider {
         digits,
         lookupCount: lookup?.length ?? 0,
       });
-      return chatId;
+      return [chatId];
     }
 
-    return recipient.jid || chatId;
+    const ownDigits = this.socket.user?.id?.split('@')[0]?.replace(/\D/g, '') ?? '';
+    const ownDirectChatId = ownDigits ? `${ownDigits}@s.whatsapp.net` : null;
+    const resolvedJid = recipient.jid || chatId;
+    const normalizedResolvedJid = `${resolvedJid.split('@')[0]?.replace(/\D/g, '')}@s.whatsapp.net`;
+    const isSendingToSelf = ownDigits !== '' && ownDigits === digits;
+
+    return Array.from(
+      new Set(
+        [
+          resolvedJid,
+          normalizedResolvedJid,
+          chatId,
+          isSendingToSelf ? this.socket.user?.id ?? null : null,
+          isSendingToSelf ? ownDirectChatId : null,
+        ].filter((value): value is string => Boolean(value)),
+      ),
+    );
   }
 
   private isSameWhatsAppUser(left: string | undefined, right: string): boolean {
