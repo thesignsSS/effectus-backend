@@ -17,6 +17,7 @@ type ProfileRow = {
   id: string;
   full_name: string | null;
   role: string;
+  appears_in_chat: boolean | null;
 };
 
 type ConversationRow = {
@@ -69,9 +70,10 @@ export class SupabaseChatStore implements ChatStore {
 
     let query = this.client
       .from('profiles')
-      .select('id, full_name, role')
+      .select('id, full_name, role, appears_in_chat')
       .eq('is_active', true)
       .neq('id', excludeUserId)
+      .eq('appears_in_chat', true)
       .order('full_name', { ascending: true });
 
     if (!requester.isAdmin) {
@@ -290,6 +292,10 @@ export class SupabaseChatStore implements ChatStore {
       throw new Error('Usuário do chat não encontrado.');
     }
 
+    if (requester.appearsInChat === false) {
+      return [];
+    }
+
     let query = this.client
       .from('chat_conversation_participants')
       .select(
@@ -400,7 +406,11 @@ export class SupabaseChatStore implements ChatStore {
   }
 
   private canUsersInteract(user: ChatDirectoryUser, otherUser: ChatDirectoryUser): boolean {
-    return user.isAdmin || otherUser.isAdmin;
+    return (
+      user.appearsInChat !== false &&
+      otherUser.appearsInChat !== false &&
+      (user.isAdmin || otherUser.isAdmin)
+    );
   }
 
   private async getProfilesByIds(userIds: string[]): Promise<Map<string, ChatDirectoryUser>> {
@@ -412,7 +422,7 @@ export class SupabaseChatStore implements ChatStore {
 
     const { data, error } = await this.client
       .from('profiles')
-      .select('id, full_name, role')
+      .select('id, full_name, role, appears_in_chat')
       .in('id', uniqueIds);
 
     if (error) {
@@ -513,6 +523,7 @@ export class SupabaseChatStore implements ChatStore {
         fullName: item.full_name?.trim() || 'Usuário',
         role,
         isAdmin: role === 'admin',
+        appearsInChat: item.appears_in_chat !== false,
       };
     });
   }

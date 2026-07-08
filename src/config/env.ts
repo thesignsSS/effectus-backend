@@ -8,6 +8,7 @@ type OcrProviderMode = 'disabled' | 'tesseract';
 
 export interface Env {
   nodeEnv: string;
+  effectusAppBaseUrl?: string;
   whatsappSessionDir: string;
   whatsappAllowedChatName: string;
   whatsappAllowedChatId?: string;
@@ -45,6 +46,7 @@ const storageProvider = (process.env.STORAGE_PROVIDER ?? 'supabase') as StorageP
 
 export const env: Env = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
+  effectusAppBaseUrl: process.env.EFFECTUS_APP_BASE_URL,
   whatsappSessionDir: process.env.WHATSAPP_SESSION_DIR ?? 'auth/whatsapp',
   whatsappAllowedChatName: process.env.WHATSAPP_ALLOWED_CHAT_NAME ?? 'docs_bot',
   whatsappAllowedChatId: process.env.WHATSAPP_ALLOWED_CHAT_ID,

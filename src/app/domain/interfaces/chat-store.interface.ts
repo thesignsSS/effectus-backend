@@ -5,6 +5,7 @@ export interface ChatDirectoryUser {
   fullName: string;
   role: UserRole;
   isAdmin: boolean;
+  appearsInChat?: boolean;
 }
 
 export interface ChatConversationSummary {

@@ -40,6 +40,7 @@ export interface FormSubmissionHttpServerConfig {
   port: number;
   maxBodyBytes: number;
   apiKey?: string;
+  effectusAppBaseUrl?: string;
 }
 
 type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
@@ -438,6 +439,7 @@ export class FormSubmissionHttpServer {
         role: profile.role,
         isAdmin: profile.isAdmin,
         isActive: profile.isActive,
+        appearsInChat: profile.appearsInChat,
         avatarPath: profile.avatarPath,
         canViewPreferencesInsights: profile.canViewPreferencesInsights,
         updatedAt: profile.updatedAt,
@@ -1636,17 +1638,21 @@ export class FormSubmissionHttpServer {
               nextStatus: effects.statusChangedTo,
             });
 
+            const proposalCommentsUrl = this.buildProposalCommentsUrl(effects.proposalId);
             await this.whatsAppService.sendTextToPhone(
               effects.brokerPhone,
-              [
-                'Sua proposta teve o status atualizado.',
-                `Proposta: ${effects.proposalCode}`,
-                `Novo status: ${statusLabel ?? effects.statusChangedTo}`,
-                effects.pendingReason ? `Motivo da pendência: ${effects.pendingReason}` : undefined,
-                effects.adminComment ? `Comentário do admin: ${effects.adminComment}` : undefined,
-              ]
-                .filter((line): line is string => Boolean(line))
-                .join('\n'),
+              effects.statusChangedTo === 'pendente'
+                ? this.buildPendingStatusWhatsAppMessage({
+                    adminName: effects.actorName,
+                    proposalCode: effects.proposalCode,
+                    pendingReason: effects.pendingReason,
+                    comment: effects.adminComment,
+                    proposalCommentsUrl,
+                  })
+                : this.buildStatusChangedWhatsAppMessage({
+                    proposalCode: effects.proposalCode,
+                    statusLabel: statusLabel ?? effects.statusChangedTo,
+                  }),
             );
 
             this.logger.info('Aviso de status da proposta enviado ao corretor pelo WhatsApp', {
@@ -1665,6 +1671,34 @@ export class FormSubmissionHttpServer {
               error: error instanceof Error ? error.message : String(error),
             });
           }
+        }
+      }
+
+      const shouldSendAdminCommentWhatsApp =
+        effects.commentAdded &&
+        effects.actorRole === 'admin' &&
+        Boolean(effects.adminComment.trim()) &&
+        effects.statusChangedTo !== 'pendente';
+
+      if (shouldSendAdminCommentWhatsApp && effects.brokerPhone) {
+        try {
+          await this.whatsAppService.sendTextToPhone(
+            effects.brokerPhone,
+            this.buildAdminCommentWhatsAppMessage({
+              adminName: effects.actorName,
+              proposalCode: effects.proposalCode,
+              comment: effects.adminComment,
+              proposalCommentsUrl: this.buildProposalCommentsUrl(effects.proposalId),
+            }),
+          );
+        } catch (error) {
+          this.logger.warn('Comentário do admin não enviado ao corretor pelo WhatsApp', {
+            proposalId: effects.proposalId,
+            proposalCode: effects.proposalCode,
+            brokerUserId: effects.brokerUserId,
+            brokerPhone: effects.brokerPhone,
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       }
 
@@ -1692,6 +1726,71 @@ export class FormSubmissionHttpServer {
         brokerUserId: effects.brokerUserId,
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  private buildStatusChangedWhatsAppMessage(input: {
+    proposalCode: string;
+    statusLabel: string;
+  }): string {
+    return [
+      'Sua proposta teve o status atualizado.',
+      `Proposta: ${input.proposalCode}`,
+      `Novo status: ${input.statusLabel}`,
+    ].join('\n');
+  }
+
+  private buildPendingStatusWhatsAppMessage(input: {
+    adminName: string;
+    proposalCode: string;
+    pendingReason: string;
+    comment: string;
+    proposalCommentsUrl?: string;
+  }): string {
+    return [
+      'Sua proposta mudou de status para Pendente.',
+      `Proposta: ${input.proposalCode}`,
+      `Administrador responsável: ${input.adminName}`,
+      input.pendingReason ? `Motivo da pendência: ${input.pendingReason}` : undefined,
+      input.comment ? `Comentário: "${input.comment}"` : undefined,
+      input.proposalCommentsUrl
+        ? `Responder comentário: ${input.proposalCommentsUrl}`
+        : undefined,
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join('\n');
+  }
+
+  private buildAdminCommentWhatsAppMessage(input: {
+    adminName: string;
+    proposalCode: string;
+    comment: string;
+    proposalCommentsUrl?: string;
+  }): string {
+    return [
+      `${input.adminName} fez um comentário na proposta ${input.proposalCode}.`,
+      `"${input.comment}"`,
+      input.proposalCommentsUrl
+        ? `Responder comentário: ${input.proposalCommentsUrl}`
+        : undefined,
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join('\n');
+  }
+
+  private buildProposalCommentsUrl(proposalId: string): string | undefined {
+    const baseUrl = this.config.effectusAppBaseUrl?.trim();
+
+    if (!baseUrl) {
+      return undefined;
+    }
+
+    try {
+      const url = new URL(`/propostas/${proposalId}`, ensureTrailingSlash(baseUrl));
+      url.searchParams.set('tab', 'comentarios');
+      return url.toString();
+    } catch {
+      return undefined;
     }
   }
 
@@ -2531,6 +2630,10 @@ function sanitizeFileName(value: string): string {
 
 function normalizeBase64(value: string): string {
   return value.replace(/\s+/g, '');
+}
+
+function ensureTrailingSlash(value: string): string {
+  return value.endsWith('/') ? value : `${value}/`;
 }
 
 function runZip(filesDir: string, zipPath: string): Promise<void> {

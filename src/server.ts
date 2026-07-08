@@ -154,6 +154,7 @@ export function buildApp(): WhatsAppController {
       port: env.formSubmissionHttpPort,
       maxBodyBytes: env.formSubmissionMaxBodyMb * 1024 * 1024,
       apiKey: env.formSubmissionApiKey,
+      effectusAppBaseUrl: env.effectusAppBaseUrl,
     },
     processFormSubmission,
     profileStore,

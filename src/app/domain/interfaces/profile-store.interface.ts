@@ -19,6 +19,7 @@ export interface UserProfile {
   role: UserRole;
   isAdmin: boolean;
   isActive: boolean;
+  appearsInChat: boolean;
   avatarPath: string | null;
   canViewPreferencesInsights: boolean;
   preferencesSnapshot: StoredUserPreferences | null;

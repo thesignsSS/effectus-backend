@@ -32,7 +32,7 @@ export class SupabaseProfileStore implements ProfileStore {
   async getById(userId: string): Promise<UserProfile | null> {
     const { data, error } = await this.client
       .from('profiles')
-      .select('id, full_name, role, is_active, avatar_path, can_view_preferences_insights, ux_preferences, ux_preferences_updated_at, updated_at')
+      .select('id, full_name, role, is_active, appears_in_chat, avatar_path, can_view_preferences_insights, ux_preferences, ux_preferences_updated_at, updated_at')
       .eq('id', userId)
       .single();
 
@@ -52,6 +52,7 @@ export class SupabaseProfileStore implements ProfileStore {
       role,
       isAdmin: role === 'admin',
       isActive: data.is_active !== false,
+      appearsInChat: data.appears_in_chat !== false,
       avatarPath: data.avatar_path ?? null,
       canViewPreferencesInsights:
         role === 'admin' || data.can_view_preferences_insights === true,
@@ -68,7 +69,7 @@ export class SupabaseProfileStore implements ProfileStore {
   }): Promise<UserProfile[]> {
     let query = this.client
       .from('profiles')
-      .select('id, full_name, role, is_active, avatar_path, can_view_preferences_insights, ux_preferences, ux_preferences_updated_at, updated_at')
+      .select('id, full_name, role, is_active, appears_in_chat, avatar_path, can_view_preferences_insights, ux_preferences, ux_preferences_updated_at, updated_at')
       .eq('is_active', true)
       .ilike('full_name', `%${input.query.replace(/[,%]/g, '')}%`)
       .limit(Math.min(20, Math.max(1, input.limit ?? 10)));
@@ -88,6 +89,7 @@ export class SupabaseProfileStore implements ProfileStore {
       full_name: string | null;
       role: string | null;
       is_active: boolean | null;
+      appears_in_chat: boolean | null;
       avatar_path: string | null;
       can_view_preferences_insights: boolean | null;
       ux_preferences: unknown;
@@ -102,6 +104,7 @@ export class SupabaseProfileStore implements ProfileStore {
         role,
         isAdmin: role === 'admin',
         isActive: item.is_active !== false,
+        appearsInChat: item.appears_in_chat !== false,
         avatarPath: item.avatar_path ?? null,
         canViewPreferencesInsights:
           role === 'admin' || item.can_view_preferences_insights === true,
@@ -115,7 +118,7 @@ export class SupabaseProfileStore implements ProfileStore {
   async listPreferenceInsights(): Promise<UserProfile[]> {
     const { data, error } = await this.client
       .from('profiles')
-      .select('id, full_name, role, is_active, avatar_path, can_view_preferences_insights, ux_preferences, ux_preferences_updated_at, updated_at')
+      .select('id, full_name, role, is_active, appears_in_chat, avatar_path, can_view_preferences_insights, ux_preferences, ux_preferences_updated_at, updated_at')
       .order('full_name', { ascending: true });
 
     if (error) {
@@ -127,6 +130,7 @@ export class SupabaseProfileStore implements ProfileStore {
       full_name: string | null;
       role: string | null;
       is_active: boolean | null;
+      appears_in_chat: boolean | null;
       avatar_path: string | null;
       can_view_preferences_insights: boolean | null;
       ux_preferences: unknown;
@@ -141,6 +145,7 @@ export class SupabaseProfileStore implements ProfileStore {
         role,
         isAdmin: role === 'admin',
         isActive: item.is_active !== false,
+        appearsInChat: item.appears_in_chat !== false,
         avatarPath: item.avatar_path ?? null,
         canViewPreferencesInsights:
           role === 'admin' || item.can_view_preferences_insights === true,

@@ -184,6 +184,7 @@ WHATSAPP_ALLOWED_CHAT_NAME=docs_bot
 QR_CODE_WEB_PORT=3334
 FORM_SUBMISSION_HTTP_PORT=3335
 OCR_PROVIDER=disabled
+EFFECTUS_APP_BASE_URL=http://localhost:5173
 ```
 
 Campos importantes:
@@ -198,6 +199,8 @@ Campos importantes:
 - `SUPABASE_FOLDER`: pasta base dentro do bucket.
 - `LOCAL_DOCUMENTS_MIRROR_ENABLED=false`: desliga a cópia local em pasta do PC.
 - `OCR_PROVIDER=disabled`: deixa OCR desligado no primeiro teste.
+- `EFFECTUS_APP_BASE_URL`: URL pública do sistema web para montar o link
+  "Responder comentário" enviado no WhatsApp.
 
 ### 3. Rode o bot em modo dev
 
