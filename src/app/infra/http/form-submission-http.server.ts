@@ -1805,7 +1805,13 @@ export class FormSubmissionHttpServer {
     const documents = readDocuments(payload.documents);
     const rawDocumentScope = readOptionalString(payload, 'documentScope', 'documentScope');
     const documentScope =
-      rawDocumentScope === 'income_validation' ? 'income_validation' : 'proposal';
+      rawDocumentScope === 'income_validation'
+        ? 'income_validation'
+        : rawDocumentScope === 'seller'
+          ? 'seller'
+          : rawDocumentScope === 'property'
+            ? 'property'
+            : 'proposal';
 
     try {
       const proposal = await this.proposalStore.getProposalContext({
@@ -2523,6 +2529,40 @@ function readOptionalProposalStatus(payload: JsonObject): ProposalStatus | undef
     return 'validacao_renda';
   }
 
+  if (
+    rawStatus === 'renda_validada' ||
+    rawStatus === 'renda validada' ||
+    compactStatus === 'rendavalidada'
+  ) {
+    return 'renda_validada';
+  }
+
+  if (
+    rawStatus === 'renda_nao_validada' ||
+    rawStatus === 'renda nao validada' ||
+    rawStatus === 'renda não validada' ||
+    compactStatus === 'rendanaovalidada'
+  ) {
+    return 'renda_nao_validada';
+  }
+
+  if (rawStatus === 'engenharia') {
+    return 'engenharia';
+  }
+
+  if (
+    rawStatus === 'formularios' ||
+    rawStatus === 'formulários' ||
+    rawStatus === 'formulario' ||
+    rawStatus === 'formulário'
+  ) {
+    return 'formularios';
+  }
+
+  if (rawStatus === 'conformidade') {
+    return 'conformidade';
+  }
+
   if (rawStatus === 'in progress') {
     return 'em_analise';
   }
@@ -2536,7 +2576,7 @@ function readOptionalProposalStatus(payload: JsonObject): ProposalStatus | undef
   }
 
   throw new Error(
-    'Status inválido. Use em_analise, pendente, condicionado, reprovado, aprovado ou validacao_renda',
+    'Status inválido. Use em_analise, pendente, condicionado, reprovado, aprovado, validacao_renda, renda_validada, renda_nao_validada, engenharia, formularios ou conformidade',
   );
 }
 

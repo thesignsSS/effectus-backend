@@ -12,6 +12,11 @@ const STATUS_LABELS: Record<ProposalStatus, string> = {
   reprovado: 'Reprovado',
   aprovado: 'Aprovado',
   validacao_renda: 'Validação de Renda',
+  renda_validada: 'Renda Validada',
+  renda_nao_validada: 'Renda Não Validada',
+  engenharia: 'Engenharia',
+  formularios: 'Formulários',
+  conformidade: 'Conformidade',
 };
 
 export class NotificationService {

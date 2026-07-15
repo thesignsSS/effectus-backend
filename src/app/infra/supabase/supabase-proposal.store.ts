@@ -854,12 +854,8 @@ export class SupabaseProposalStore implements ProposalStore {
       input.brokerUserId,
       access,
       uploadedNames.length === 1
-        ? input.documentScope === 'income_validation'
-          ? `Documento enviado para validação de renda: "${uploadedNames[0]}".`
-          : `Documento enviado: "${uploadedNames[0]}".`
-        : input.documentScope === 'income_validation'
-          ? `Documentos enviados para validação de renda (${uploadedNames.length}): ${uploadedNames.map((name) => `"${name}"`).join(', ')}.`
-          : `Documentos enviados (${uploadedNames.length}): ${uploadedNames.map((name) => `"${name}"`).join(', ')}.`,
+        ? `Documento enviado${this.getDocumentScopeAuditSuffix(input.documentScope)}: "${uploadedNames[0]}".`
+        : `Documentos enviados${this.getDocumentScopeAuditSuffix(input.documentScope)} (${uploadedNames.length}): ${uploadedNames.map((name) => `"${name}"`).join(', ')}.`,
     );
   }
 
@@ -1328,6 +1324,12 @@ export class SupabaseProposalStore implements ProposalStore {
         (document) => (document.document_scope ?? 'proposal') === 'income_validation',
       )
       .map(mapDocument);
+    const sellerDocuments = allDocuments
+      .filter((document) => (document.document_scope ?? 'proposal') === 'seller')
+      .map(mapDocument);
+    const propertyDocuments = allDocuments
+      .filter((document) => (document.document_scope ?? 'proposal') === 'property')
+      .map(mapDocument);
 
     return {
       id: row.id,
@@ -1366,6 +1368,8 @@ export class SupabaseProposalStore implements ProposalStore {
       })),
       documents,
       incomeValidationDocuments,
+      sellerDocuments,
+      propertyDocuments,
       guests,
       shareLinkToken: shareLink?.token ?? null,
       pendingInvitations,
@@ -1400,6 +1404,24 @@ export class SupabaseProposalStore implements ProposalStore {
     });
 
     return counts;
+  }
+
+  private getDocumentScopeAuditSuffix(
+    scope: ProposalDocumentScope | undefined,
+  ): string {
+    if (scope === 'income_validation') {
+      return ' para validação de renda';
+    }
+
+    if (scope === 'seller') {
+      return ' na pasta de vendedor';
+    }
+
+    if (scope === 'property') {
+      return ' na pasta de imóvel';
+    }
+
+    return '';
   }
 
   private toDocumentLookup(row: ProposalDocumentRow): ProposalDocumentLookup {
@@ -1438,7 +1460,15 @@ export class SupabaseProposalStore implements ProposalStore {
   }
 
   private isBrokerReadOnlyStatus(status: ProposalStatus): boolean {
-    return status === 'aprovado' || status === 'validacao_renda';
+    return (
+      status === 'aprovado' ||
+      status === 'validacao_renda' ||
+      status === 'renda_validada' ||
+      status === 'renda_nao_validada' ||
+      status === 'engenharia' ||
+      status === 'formularios' ||
+      status === 'conformidade'
+    );
   }
 
   private extractIncomeValidationData(

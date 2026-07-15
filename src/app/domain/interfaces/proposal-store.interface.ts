@@ -11,7 +11,11 @@ export interface ProposalDocumentInput {
   documentScope?: ProposalDocumentScope;
 }
 
-export type ProposalDocumentScope = 'proposal' | 'income_validation';
+export type ProposalDocumentScope =
+  | 'proposal'
+  | 'income_validation'
+  | 'seller'
+  | 'property';
 
 export type ProposalCommentType =
   | 'comment'
@@ -36,7 +40,12 @@ export type ProposalStatus =
   | 'condicionado'
   | 'reprovado'
   | 'aprovado'
-  | 'validacao_renda';
+  | 'validacao_renda'
+  | 'renda_validada'
+  | 'renda_nao_validada'
+  | 'engenharia'
+  | 'formularios'
+  | 'conformidade';
 
 export interface ProposalStatusInfo {
   status: ProposalStatus;
@@ -71,6 +80,11 @@ export const PROPOSAL_STATUS_OPTIONS: ProposalStatusOption[] = [
   { value: 'reprovado', label: 'Reprovado' },
   { value: 'aprovado', label: 'Aprovado' },
   { value: 'validacao_renda', label: 'Validação de Renda' },
+  { value: 'renda_validada', label: 'Renda Validada' },
+  { value: 'renda_nao_validada', label: 'Renda Não Validada' },
+  { value: 'engenharia', label: 'Engenharia' },
+  { value: 'formularios', label: 'Formulários' },
+  { value: 'conformidade', label: 'Conformidade' },
 ];
 
 export interface CreateProposalInput {
@@ -258,6 +272,8 @@ export interface ProposalDetail {
   comments: ProposalComment[];
   documents: ProposalDocument[];
   incomeValidationDocuments: ProposalDocument[];
+  sellerDocuments: ProposalDocument[];
+  propertyDocuments: ProposalDocument[];
   guests: ProposalGuest[];
   shareLinkToken: string | null;
   pendingInvitations: ProposalInvitation[];
