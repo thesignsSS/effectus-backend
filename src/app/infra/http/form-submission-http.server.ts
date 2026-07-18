@@ -1451,6 +1451,7 @@ export class FormSubmissionHttpServer {
       brokerUserId = readRequiredString(payload, 'brokerUserId', 'corretorUserId');
       proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
       const status = readOptionalProposalStatus(payload);
+      const commentScope = readOptionalProposalCommentScope(payload);
 
       const result = await this.proposalStore.update({
         proposalId,
@@ -1468,6 +1469,7 @@ export class FormSubmissionHttpServer {
         additionalInfo: readOptionalString(payload, 'additionalInfo', 'informacoesAdicionais'),
         pendingReason: readOptionalString(payload, 'pendingReason', 'motivoPendencia'),
         commentMessage: readOptionalString(payload, 'commentMessage', 'comentario'),
+        commentScope,
         formData: readOptionalObject(payload, 'formData', 'data'),
         status,
       });
@@ -1594,6 +1596,7 @@ export class FormSubmissionHttpServer {
         actorRole: profile.role,
         actorName: profile.fullName,
         message: `E-mail da validação de renda enviado para ${to.map((recipient) => `"${recipient}"`).join(', ')} com assunto "${subject}".`,
+        scope: 'income_validation',
       });
 
       this.logger.info('E-mail da validação de renda enviado com sucesso', {
@@ -1952,7 +1955,7 @@ export class FormSubmissionHttpServer {
         proposalId,
         documentId,
       });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
     }
   }
 
@@ -2151,7 +2154,14 @@ export class FormSubmissionHttpServer {
       const zipPath = path.join(tempRoot, `${proposal.proposalCode}.zip`);
       await fs.mkdir(filesDir, { recursive: true });
 
-      for (const document of proposal.documents) {
+      const allDocuments = [
+        ...proposal.documents,
+        ...proposal.sellerDocuments,
+        ...proposal.propertyDocuments,
+        ...proposal.incomeValidationDocuments,
+      ];
+
+      for (const document of allDocuments) {
         const buffer = await this.storageService.download(document.storageLocation);
         const outputPath = path.join(filesDir, sanitizeFileName(document.displayName));
         await fs.writeFile(outputPath, buffer);
@@ -2559,8 +2569,42 @@ function readOptionalProposalStatus(payload: JsonObject): ProposalStatus | undef
     return 'formularios';
   }
 
+  if (rawStatus === 'aguardando reserva' || compactStatus === 'aguardandoreserva') {
+    return 'aguardando_reserva';
+  }
+
   if (rawStatus === 'conformidade') {
     return 'conformidade';
+  }
+
+  if (
+    rawStatus === 'agendamento na agencia' ||
+    rawStatus === 'agendamento agencia' ||
+    compactStatus === 'agendamentonaagencia' ||
+    compactStatus === 'agendamentoagencia'
+  ) {
+    return 'agendamento_agencia';
+  }
+
+  if (rawStatus === 'itbi') {
+    return 'itbi';
+  }
+
+  if (
+    rawStatus === 'assinatura de contrato' ||
+    rawStatus === 'assinatura contrato' ||
+    compactStatus === 'assinaturadecontrato' ||
+    compactStatus === 'assinaturacontrato'
+  ) {
+    return 'assinatura_contrato';
+  }
+
+  if (rawStatus === 'registro') {
+    return 'registro';
+  }
+
+  if (rawStatus === 'finalizado' || rawStatus === 'finalizada') {
+    return 'finalizado';
   }
 
   if (rawStatus === 'in progress') {
@@ -2576,7 +2620,30 @@ function readOptionalProposalStatus(payload: JsonObject): ProposalStatus | undef
   }
 
   throw new Error(
-    'Status inválido. Use em_analise, pendente, condicionado, reprovado, aprovado, validacao_renda, renda_validada, renda_nao_validada, engenharia, formularios ou conformidade',
+    'Status inválido. Use em_analise, pendente, condicionado, reprovado, aprovado, validacao_renda, renda_validada, renda_nao_validada, engenharia, formularios, aguardando_reserva, conformidade, agendamento_agencia, itbi, assinatura_contrato, registro ou finalizado',
+  );
+}
+
+function readOptionalProposalCommentScope(
+  payload: JsonObject,
+): 'proposal' | 'income_validation' | 'seller' | 'property' | undefined {
+  const value = payload.commentScope ?? payload.escopoComentario;
+
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+
+  if (
+    value === 'proposal' ||
+    value === 'income_validation' ||
+    value === 'seller' ||
+    value === 'property'
+  ) {
+    return value;
+  }
+
+  throw new Error(
+    'Escopo de comentário inválido. Use proposal, income_validation, seller ou property',
   );
 }
 

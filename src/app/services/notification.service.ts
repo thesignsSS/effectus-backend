@@ -16,7 +16,13 @@ const STATUS_LABELS: Record<ProposalStatus, string> = {
   renda_nao_validada: 'Renda Não Validada',
   engenharia: 'Engenharia',
   formularios: 'Formulários',
+  aguardando_reserva: 'Aguardando Reserva',
   conformidade: 'Conformidade',
+  agendamento_agencia: 'Agendamento na Agência',
+  itbi: 'ITBI',
+  assinatura_contrato: 'Assinatura de Contrato',
+  registro: 'Registro',
+  finalizado: 'Finalizado',
 };
 
 export class NotificationService {

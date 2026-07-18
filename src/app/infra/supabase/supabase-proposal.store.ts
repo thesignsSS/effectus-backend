@@ -309,6 +309,7 @@ export class SupabaseProposalStore implements ProposalStore {
             authorRole: access.role,
             message: trimmedCommentMessage,
             type: 'comment',
+            scope: input.commentScope ?? 'proposal',
           }),
         );
         commentAdded = true;
@@ -335,6 +336,7 @@ export class SupabaseProposalStore implements ProposalStore {
           authorRole: access.role,
           message: incomeValidationAuditMessage,
           type: 'audit',
+          scope: 'income_validation',
         }),
       );
     }
@@ -438,11 +440,11 @@ export class SupabaseProposalStore implements ProposalStore {
 
     const normalizedSearch = input.search?.trim();
     if (normalizedSearch) {
-      const escapedSearch = escapeLike(normalizedSearch);
+      const escapedSearch = escapeLike(normalizeSearchText(normalizedSearch));
       const proposalNumber = parseProposalNumber(normalizedSearch);
       const filters = [
-        `client_name.ilike.%${escapedSearch}%`,
-        `broker_name.ilike.%${escapedSearch}%`,
+        `client_name_search.ilike.%${escapedSearch}%`,
+        `broker_name_search.ilike.%${escapedSearch}%`,
       ];
 
       if (proposalNumber) {
@@ -456,12 +458,18 @@ export class SupabaseProposalStore implements ProposalStore {
 
     const normalizedClientName = input.clientName?.trim();
     if (normalizedClientName) {
-      query = query.ilike('client_name', `%${escapeLike(normalizedClientName)}%`);
+      query = query.ilike(
+        'client_name_search',
+        `%${escapeLike(normalizeSearchText(normalizedClientName))}%`,
+      );
     }
 
     const normalizedBrokerName = input.brokerName?.trim();
     if (normalizedBrokerName) {
-      query = query.ilike('broker_name', `%${escapeLike(normalizedBrokerName)}%`);
+      query = query.ilike(
+        'broker_name_search',
+        `%${escapeLike(normalizeSearchText(normalizedBrokerName))}%`,
+      );
     }
 
     const normalizedProposalCode = input.proposalCode?.trim();
@@ -643,24 +651,9 @@ export class SupabaseProposalStore implements ProposalStore {
   async renameDocument(input: RenameProposalDocumentInput): Promise<void> {
     const access = await this.resolveAccess(input.brokerUserId);
     const document = await this.getDocument(input);
-    const proposal = await this.getProposalForUpdate(input.proposalId);
     if (!document) {
       throw new Error('Documento da proposta não encontrado');
     }
-    if (!proposal) {
-      throw new Error('Proposta não encontrada');
-    }
-
-    this.assertBrokerCanModifyProposal(
-      access,
-      toStatusInfo(proposal.status).status,
-      proposal,
-      {
-        proposalId: input.proposalId,
-        brokerUserId: input.brokerUserId,
-        formData: undefined,
-      },
-    );
 
     const { error } = await this.client
       .from('proposal_documents')
@@ -679,6 +672,7 @@ export class SupabaseProposalStore implements ProposalStore {
       input.brokerUserId,
       access,
       `Documento renomeado: "${document.originalFilename}" -> "${input.displayName}".`,
+      document.documentScope,
     );
   }
 
@@ -695,16 +689,11 @@ export class SupabaseProposalStore implements ProposalStore {
       throw new Error('Proposta não encontrada');
     }
 
-    this.assertBrokerCanModifyProposal(
-      access,
-      toStatusInfo(proposal.status).status,
-      proposal,
-      {
-        proposalId: input.proposalId,
-        brokerUserId: input.brokerUserId,
-        formData: undefined,
-      },
-    );
+    const uploadedByUserId = document.uploadedByUserId ?? proposal.broker_user_id;
+
+    if (!access.isAdmin && uploadedByUserId !== input.brokerUserId) {
+      throw new Error('Sem permissão para excluir documentos enviados por outro usuário.');
+    }
 
     const { error } = await this.client
       .from('proposal_documents')
@@ -721,6 +710,7 @@ export class SupabaseProposalStore implements ProposalStore {
       input.brokerUserId,
       access,
       `Documento excluído: "${document.originalFilename}".`,
+      document.documentScope,
     );
 
     return document;
@@ -809,23 +799,10 @@ export class SupabaseProposalStore implements ProposalStore {
       brokerUserId: input.brokerUserId,
       proposalId: input.proposalId,
     });
-    const proposalForUpdate = await this.getProposalForUpdate(input.proposalId);
 
-    if (!proposal || !proposalForUpdate) {
+    if (!proposal) {
       throw new Error('Proposta não encontrada');
     }
-
-    this.assertBrokerCanModifyProposal(
-      access,
-      toStatusInfo(proposalForUpdate.status).status,
-      proposalForUpdate,
-      {
-        proposalId: input.proposalId,
-        brokerUserId: input.brokerUserId,
-        formData: undefined,
-      },
-      true,
-    );
 
     const { error } = await this.client.from('proposal_documents').insert(
       input.documents.map((document) => ({
@@ -856,6 +833,7 @@ export class SupabaseProposalStore implements ProposalStore {
       uploadedNames.length === 1
         ? `Documento enviado${this.getDocumentScopeAuditSuffix(input.documentScope)}: "${uploadedNames[0]}".`
         : `Documentos enviados${this.getDocumentScopeAuditSuffix(input.documentScope)} (${uploadedNames.length}): ${uploadedNames.map((name) => `"${name}"`).join(', ')}.`,
+      input.documentScope ?? 'proposal',
     );
   }
 
@@ -1384,24 +1362,39 @@ export class SupabaseProposalStore implements ProposalStore {
       return new Map();
     }
 
-    const { data, error } = await this.client
-      .from('proposal_documents')
-      .select('proposal_id')
-      .in('proposal_id', proposalIds)
-      .eq('document_scope', documentScope);
-
-    if (error) {
-      throw new Error(`Supabase proposal documents count failed: ${error.message}`);
-    }
-
     const counts = new Map<string, number>();
+    const pageSize = 1000;
+    let offset = 0;
 
-    ((data as Array<{ proposal_id: string }> | null) ?? []).forEach((document) => {
-      counts.set(
-        document.proposal_id,
-        (counts.get(document.proposal_id) ?? 0) + 1,
-      );
-    });
+    while (true) {
+      const baseQuery = this.client
+        .from('proposal_documents')
+        .select('proposal_id')
+        .in('proposal_id', proposalIds);
+      const scopedQuery = documentScope === 'proposal'
+        ? baseQuery.or('document_scope.eq.proposal,document_scope.is.null')
+        : baseQuery.eq('document_scope', documentScope);
+      const { data, error } = await scopedQuery.range(offset, offset + pageSize - 1);
+
+      if (error) {
+        throw new Error(`Supabase proposal documents count failed: ${error.message}`);
+      }
+
+      const documents = (data as Array<{ proposal_id: string }> | null) ?? [];
+
+      documents.forEach((document) => {
+        counts.set(
+          document.proposal_id,
+          (counts.get(document.proposal_id) ?? 0) + 1,
+        );
+      });
+
+      if (documents.length < pageSize) {
+        break;
+      }
+
+      offset += pageSize;
+    }
 
     return counts;
   }
@@ -1429,6 +1422,8 @@ export class SupabaseProposalStore implements ProposalStore {
       id: row.id,
       filename: row.filename,
       originalFilename: row.original_filename,
+      uploadedByUserId: row.uploaded_by_user_id,
+      documentScope: row.document_scope ?? 'proposal',
       storageLocation: row.storage_location,
       contentType: row.content_type,
       sizeBytes: row.size_bytes,
@@ -1467,7 +1462,13 @@ export class SupabaseProposalStore implements ProposalStore {
       status === 'renda_nao_validada' ||
       status === 'engenharia' ||
       status === 'formularios' ||
-      status === 'conformidade'
+      status === 'aguardando_reserva' ||
+      status === 'conformidade' ||
+      status === 'agendamento_agencia' ||
+      status === 'itbi' ||
+      status === 'assinatura_contrato' ||
+      status === 'registro' ||
+      status === 'finalizado'
     );
   }
 
@@ -1549,6 +1550,7 @@ export class SupabaseProposalStore implements ProposalStore {
       | 'status'
       | 'pendingReason'
       | 'commentMessage'
+      | 'commentScope'
     >,
   ): boolean {
     if (status !== 'aprovado' || input.status !== 'validacao_renda') {
@@ -1567,7 +1569,45 @@ export class SupabaseProposalStore implements ProposalStore {
       input.additionalInfo === undefined &&
       input.formData === undefined &&
       input.pendingReason === undefined &&
-      input.commentMessage === undefined
+      input.commentMessage === undefined &&
+      input.commentScope === undefined
+    );
+  }
+
+  private isCommentOnlyUpdate(
+    input: Pick<
+      UpdateProposalInput,
+      | 'brokerPhone'
+      | 'clientName'
+      | 'clientCpf'
+      | 'clientEmail'
+      | 'clientPhone'
+      | 'propertyType'
+      | 'propertyCity'
+      | 'propertyState'
+      | 'additionalInfo'
+      | 'formData'
+      | 'status'
+      | 'pendingReason'
+      | 'commentMessage'
+      | 'commentScope'
+    >,
+  ): boolean {
+    return (
+      typeof input.commentMessage === 'string' &&
+      input.commentMessage.trim().length > 0 &&
+      input.brokerPhone === undefined &&
+      input.clientName === undefined &&
+      input.clientCpf === undefined &&
+      input.clientEmail === undefined &&
+      input.clientPhone === undefined &&
+      input.propertyType === undefined &&
+      input.propertyCity === undefined &&
+      input.propertyState === undefined &&
+      input.additionalInfo === undefined &&
+      input.formData === undefined &&
+      input.status === undefined &&
+      input.pendingReason === undefined
     );
   }
 
@@ -1600,6 +1640,10 @@ export class SupabaseProposalStore implements ProposalStore {
     }
 
     if (this.isApprovalToIncomeValidationTransitionOnly(status, input)) {
+      return;
+    }
+
+    if (this.isCommentOnlyUpdate(input)) {
       return;
     }
 
@@ -1641,6 +1685,7 @@ export class SupabaseProposalStore implements ProposalStore {
     actorUserId: string,
     access: { role: UserRole; fullName: string },
     message: string,
+    scope: ProposalComment['scope'] = 'proposal',
   ): Promise<void> {
     const currentProposal = await this.getProposalForUpdate(proposalId);
 
@@ -1656,6 +1701,7 @@ export class SupabaseProposalStore implements ProposalStore {
         authorRole: access.role,
         message,
         type: 'audit',
+        scope,
       }),
     );
 
@@ -1677,6 +1723,7 @@ export class SupabaseProposalStore implements ProposalStore {
     actorRole: UserRole;
     actorName: string;
     message: string;
+    scope?: ProposalComment['scope'];
   }): Promise<void> {
     await this.appendProposalAuditComment(
       input.proposalId,
@@ -1686,6 +1733,7 @@ export class SupabaseProposalStore implements ProposalStore {
         fullName: input.actorName,
       },
       input.message,
+      input.scope,
     );
   }
 
@@ -2079,6 +2127,7 @@ function normalizeProposalComments(value: unknown): ProposalComment[] {
     }
 
     const type = normalizeCommentType(record.type);
+    const scope = normalizeCommentScope(record.scope);
 
     return [{
       id: record.id,
@@ -2091,6 +2140,7 @@ function normalizeProposalComments(value: unknown): ProposalComment[] {
       createdAt: record.createdAt,
       message: record.message,
       type,
+      scope,
     }];
   });
 }
@@ -2107,12 +2157,25 @@ function normalizeCommentType(value: unknown): ProposalCommentType {
   return 'comment';
 }
 
+function normalizeCommentScope(value: unknown): ProposalComment['scope'] {
+  if (
+    value === 'income_validation' ||
+    value === 'seller' ||
+    value === 'property'
+  ) {
+    return value;
+  }
+
+  return 'proposal';
+}
+
 function buildProposalComment(input: {
   authorName: string;
   authorUserId: string;
   authorRole: UserRole;
   message: string;
   type: ProposalCommentType;
+  scope?: ProposalComment['scope'];
 }): ProposalComment {
   return {
     id: randomUUID(),
@@ -2122,6 +2185,7 @@ function buildProposalComment(input: {
     createdAt: new Date().toISOString(),
     message: input.message,
     type: input.type,
+    scope: input.scope ?? 'proposal',
   };
 }
 
@@ -2131,6 +2195,14 @@ function getAccessDisplayName(access: { role: UserRole; fullName: string }): str
 
 function escapeLike(value: string): string {
   return value.replace(/[,%]/g, '');
+}
+
+function normalizeSearchText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('pt-BR')
+    .trim();
 }
 
 function parseProposalNumber(value: string): number | null {

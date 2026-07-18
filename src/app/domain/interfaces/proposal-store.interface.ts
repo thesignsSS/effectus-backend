@@ -17,6 +17,8 @@ export type ProposalDocumentScope =
   | 'seller'
   | 'property';
 
+export type ProposalCommentScope = ProposalDocumentScope;
+
 export type ProposalCommentType =
   | 'comment'
   | 'pending_reason'
@@ -32,6 +34,7 @@ export interface ProposalComment {
   createdAt: string;
   message: string;
   type: ProposalCommentType;
+  scope: ProposalCommentScope;
 }
 
 export type ProposalStatus =
@@ -45,7 +48,13 @@ export type ProposalStatus =
   | 'renda_nao_validada'
   | 'engenharia'
   | 'formularios'
-  | 'conformidade';
+  | 'aguardando_reserva'
+  | 'conformidade'
+  | 'agendamento_agencia'
+  | 'itbi'
+  | 'assinatura_contrato'
+  | 'registro'
+  | 'finalizado';
 
 export interface ProposalStatusInfo {
   status: ProposalStatus;
@@ -84,7 +93,13 @@ export const PROPOSAL_STATUS_OPTIONS: ProposalStatusOption[] = [
   { value: 'renda_nao_validada', label: 'Renda Não Validada' },
   { value: 'engenharia', label: 'Engenharia' },
   { value: 'formularios', label: 'Formulários' },
+  { value: 'aguardando_reserva', label: 'Aguardando Reserva' },
   { value: 'conformidade', label: 'Conformidade' },
+  { value: 'agendamento_agencia', label: 'Agendamento na Agência' },
+  { value: 'itbi', label: 'ITBI' },
+  { value: 'assinatura_contrato', label: 'Assinatura de Contrato' },
+  { value: 'registro', label: 'Registro' },
+  { value: 'finalizado', label: 'Finalizado' },
 ];
 
 export interface CreateProposalInput {
@@ -151,6 +166,7 @@ export interface UpdateProposalInput {
   status?: ProposalStatus;
   pendingReason?: string;
   commentMessage?: string;
+  commentScope?: ProposalCommentScope;
 }
 
 export interface ProposalDocumentContext {
@@ -176,6 +192,8 @@ export interface DeleteProposalDocumentInput {
 export interface ProposalDocumentLookup {
   id: string;
   originalFilename: string;
+  uploadedByUserId: string | null;
+  documentScope: ProposalDocumentScope;
   storageLocation: string;
   filename: string;
   contentType: string;
@@ -295,6 +313,7 @@ export interface ProposalStore {
     actorRole: UserRole;
     actorName: string;
     message: string;
+    scope?: ProposalCommentScope;
   }): Promise<void>;
   countPendingByBroker(input: {
     brokerUserId: string;
