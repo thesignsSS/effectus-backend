@@ -1632,6 +1632,7 @@ export class SupabaseProposalStore implements ProposalStore {
       | 'status'
       | 'pendingReason'
       | 'commentMessage'
+      | 'commentScope'
     >,
     allowIncomeValidationDocuments = false,
   ): void {
