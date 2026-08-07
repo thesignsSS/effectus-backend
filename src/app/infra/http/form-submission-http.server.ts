@@ -30,6 +30,18 @@ import {
   ProcessFormSubmissionUseCase,
 } from '../../use-cases/process-form-submission.usecase.js';
 import {
+  EngineeringRequestDocument,
+  ProcessEngineeringRequestInput,
+  ProcessEngineeringRequestUseCase,
+} from '../../use-cases/process-engineering-request.usecase.js';
+import {
+  ENGINEERING_REQUEST_STATUS_OPTIONS,
+  EngineeringPropertyKind,
+  EngineeringRequestStatus,
+  EngineeringRequestStore,
+  formatEngineeringRequestCode,
+} from '../../domain/interfaces/engineering-request-store.interface.js';
+import {
   generateDocumentFileName,
   getContentTypeByFilename,
   getFileExtension,
@@ -64,6 +76,8 @@ export class FormSubmissionHttpServer {
   constructor(
     private readonly config: FormSubmissionHttpServerConfig,
     private readonly processFormSubmission: ProcessFormSubmissionUseCase,
+    private readonly processEngineeringRequest: ProcessEngineeringRequestUseCase,
+    private readonly engineeringRequestStore: EngineeringRequestStore,
     private readonly profileStore: ProfileStore,
     private readonly proposalStore: ProposalStore,
     private readonly storageService: OneDriveService,
@@ -364,6 +378,46 @@ export class FormSubmissionHttpServer {
       return;
     }
 
+    if (
+      request.method === 'POST' &&
+      requestUrl.pathname === '/api/engineering-requests'
+    ) {
+      await this.handleCreateEngineeringRequest(request, response);
+      return;
+    }
+
+    if (
+      request.method === 'GET' &&
+      requestUrl.pathname === '/api/engineering-requests'
+    ) {
+      await this.handleListEngineeringRequests(requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'GET' &&
+      requestUrl.pathname.match(/^\/api\/engineering-requests\/[^/]+$/)
+    ) {
+      await this.handleGetEngineeringRequest(requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'PATCH' &&
+      requestUrl.pathname.match(/^\/api\/engineering-requests\/[^/]+$/)
+    ) {
+      await this.handleUpdateEngineeringRequest(request, requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'DELETE' &&
+      requestUrl.pathname.match(/^\/api\/engineering-requests\/[^/]+$/)
+    ) {
+      await this.handleDeleteEngineeringRequest(requestUrl, response);
+      return;
+    }
+
     if (request.method !== 'POST' || requestUrl.pathname !== '/api/form-submissions') {
       this.sendJson(response, 404, { error: 'Endpoint não encontrado' });
       return;
@@ -403,6 +457,236 @@ export class FormSubmissionHttpServer {
         ok: false,
         error: message,
       });
+    }
+  }
+
+  private async handleCreateEngineeringRequest(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    try {
+      const payload = await this.readJsonBody(request);
+      const input = this.toEngineeringRequestInput(payload);
+      const result = await this.processEngineeringRequest.execute(input);
+
+      this.sendJson(response, 201, {
+        ok: true,
+        requestId: result.requestId,
+        requestCode: formatEngineeringRequestCode(result.requestNumber),
+        uploadedFiles: result.uploadedLocations.length,
+        locations: result.uploadedLocations,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      this.logger.error('Falha ao processar solicitação de engenharia', {
+        error: message,
+      });
+
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
+    }
+  }
+
+  private toEngineeringRequestInput(payload: JsonObject): ProcessEngineeringRequestInput {
+    const brokerUserId = readRequiredString(payload, 'brokerUserId', 'corretorUserId');
+    const brokerName = readRequiredString(payload, 'brokerName', 'corretor');
+    const propertyKind = readRequiredPropertyKind(payload);
+    const propertyValue = readRequiredNumber(payload, 'propertyValue', 'valorImovel');
+    const contactPhone = readRequiredString(payload, 'contactPhone', 'contato');
+    const accompanyingName = readRequiredString(
+      payload,
+      'accompanyingName',
+      'nomeAcompanhante',
+    );
+    const documents = readEngineeringDocuments(payload.documents);
+
+    return {
+      brokerUserId,
+      brokerName,
+      propertyKind,
+      propertyValue,
+      contactPhone,
+      accompanyingName,
+      documents,
+    };
+  }
+
+  private async handleListEngineeringRequests(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const brokerUserId = requestUrl.searchParams.get('brokerUserId')?.trim();
+
+    if (!brokerUserId) {
+      this.sendJson(response, 400, {
+        ok: false,
+        error: 'Campo obrigatório ausente: brokerUserId',
+      });
+      return;
+    }
+
+    const page = Math.max(1, Number(requestUrl.searchParams.get('page') ?? 1));
+    const pageSize = Math.min(
+      100,
+      Math.max(1, Number(requestUrl.searchParams.get('pageSize') ?? 20)),
+    );
+    const search = requestUrl.searchParams.get('search')?.trim() ?? undefined;
+
+    try {
+      const result = await this.engineeringRequestStore.listByBroker({
+        brokerUserId,
+        search,
+        page,
+        pageSize,
+      });
+
+      this.sendJson(response, 200, {
+        items: result.items,
+        total: result.total,
+        page: result.page,
+        pageSize: result.pageSize,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao listar solicitações de engenharia', {
+        error: message,
+        brokerUserId,
+      });
+      this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handleGetEngineeringRequest(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const brokerUserId = requestUrl.searchParams.get('brokerUserId')?.trim();
+
+    if (!brokerUserId) {
+      this.sendJson(response, 400, {
+        ok: false,
+        error: 'Campo obrigatório ausente: brokerUserId',
+      });
+      return;
+    }
+
+    const requestId = getRequiredPathSegment(requestUrl.pathname, 2, 'requestId');
+
+    try {
+      const engineeringRequest = await this.engineeringRequestStore.getById({
+        brokerUserId,
+        requestId,
+      });
+
+      if (!engineeringRequest) {
+        this.sendJson(response, 404, {
+          ok: false,
+          error: 'Solicitação de engenharia não encontrada',
+        });
+        return;
+      }
+
+      this.sendJson(response, 200, engineeringRequest as unknown as JsonObject);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao buscar solicitação de engenharia', {
+        error: message,
+        brokerUserId,
+        requestId,
+      });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
+    }
+  }
+
+  private async handleUpdateEngineeringRequest(
+    request: IncomingMessage,
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    let requestId: string | undefined;
+    let brokerUserId: string | undefined;
+
+    try {
+      const payload = await this.readJsonBody(request);
+      brokerUserId = readRequiredString(payload, 'brokerUserId', 'corretorUserId');
+      requestId = getRequiredPathSegment(requestUrl.pathname, 2, 'requestId');
+
+      const result = await this.engineeringRequestStore.update({
+        requestId,
+        brokerUserId,
+        propertyKind: readOptionalPropertyKind(payload),
+        propertyValue: readOptionalNumber(payload, 'propertyValue', 'valorImovel'),
+        contactPhone: readOptionalString(payload, 'contactPhone', 'contato'),
+        accompanyingName: readOptionalString(
+          payload,
+          'accompanyingName',
+          'nomeAcompanhante',
+        ),
+        status: readOptionalEngineeringStatus(payload),
+        commentMessage: readOptionalString(payload, 'commentMessage', 'comentario'),
+      });
+
+      this.sendJson(response, 200, {
+        ok: true,
+        requestId,
+        ...(result ? { status: result.status, statusLabel: result.statusLabel } : {}),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao atualizar solicitação de engenharia', {
+        error: message,
+        requestId,
+        brokerUserId,
+      });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
+    }
+  }
+
+  private async handleDeleteEngineeringRequest(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const brokerUserId = requestUrl.searchParams.get('brokerUserId')?.trim();
+
+    if (!brokerUserId) {
+      this.sendJson(response, 400, {
+        ok: false,
+        error: 'Campo obrigatório ausente: brokerUserId',
+      });
+      return;
+    }
+
+    const requestId = getRequiredPathSegment(requestUrl.pathname, 2, 'requestId');
+
+    try {
+      const result = await this.engineeringRequestStore.delete({ requestId, brokerUserId });
+
+      if (!result) {
+        this.sendJson(response, 404, {
+          ok: false,
+          error: 'Solicitação de engenharia não encontrada',
+        });
+        return;
+      }
+
+      await Promise.all(
+        result.documentLocations.map((location) =>
+          this.storageService.delete(location).catch(() => undefined),
+        ),
+      );
+
+      this.sendJson(response, 200, { ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao excluir solicitação de engenharia', {
+        error: message,
+        requestId,
+        brokerUserId,
+      });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
     }
   }
 
@@ -2669,6 +2953,139 @@ function readDocuments(value: JsonValue | undefined): FormSubmissionDocument[] {
     }
 
     return {
+      filename: filename.trim(),
+      contentBase64,
+    };
+  });
+}
+
+function readRequiredNumber(
+  payload: JsonObject,
+  primaryKey: string,
+  fallbackKey: string,
+): number {
+  const rawValue = payload[primaryKey] ?? payload[fallbackKey];
+  const value =
+    typeof rawValue === 'number'
+      ? rawValue
+      : typeof rawValue === 'string'
+      ? Number(rawValue.replace(/\./g, '').replace(',', '.'))
+      : NaN;
+
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`Campo obrigatório ausente: ${primaryKey}`);
+  }
+
+  return value;
+}
+
+const ENGINEERING_PROPERTY_KINDS: EngineeringPropertyKind[] = ['Novo', 'Usado', 'Terreno'];
+const ENGINEERING_REQUEST_STATUS_VALUES: EngineeringRequestStatus[] =
+  ENGINEERING_REQUEST_STATUS_OPTIONS.map((option) => option.value);
+
+function readRequiredPropertyKind(payload: JsonObject): EngineeringPropertyKind {
+  const value = readRequiredString(payload, 'propertyKind', 'tipoImovel');
+
+  if (!ENGINEERING_PROPERTY_KINDS.includes(value as EngineeringPropertyKind)) {
+    throw new Error(
+      `Tipo de imóvel inválido: ${value}. Use um dos seguintes: ${ENGINEERING_PROPERTY_KINDS.join(', ')}`,
+    );
+  }
+
+  return value as EngineeringPropertyKind;
+}
+
+function readOptionalPropertyKind(
+  payload: JsonObject,
+): EngineeringPropertyKind | undefined {
+  const value = readOptionalString(payload, 'propertyKind', 'tipoImovel');
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!ENGINEERING_PROPERTY_KINDS.includes(value as EngineeringPropertyKind)) {
+    throw new Error(
+      `Tipo de imóvel inválido: ${value}. Use um dos seguintes: ${ENGINEERING_PROPERTY_KINDS.join(', ')}`,
+    );
+  }
+
+  return value as EngineeringPropertyKind;
+}
+
+function readOptionalEngineeringStatus(
+  payload: JsonObject,
+): EngineeringRequestStatus | undefined {
+  const value = readOptionalString(payload, 'status', 'situacao');
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!ENGINEERING_REQUEST_STATUS_VALUES.includes(value as EngineeringRequestStatus)) {
+    throw new Error(
+      `Status inválido: ${value}. Use um dos seguintes: ${ENGINEERING_REQUEST_STATUS_VALUES.join(', ')}`,
+    );
+  }
+
+  return value as EngineeringRequestStatus;
+}
+
+function readOptionalNumber(
+  payload: JsonObject,
+  primaryKey: string,
+  fallbackKey: string,
+): number | undefined {
+  const rawValue = payload[primaryKey] ?? payload[fallbackKey];
+
+  if (rawValue === undefined || rawValue === null || rawValue === '') {
+    return undefined;
+  }
+
+  const value =
+    typeof rawValue === 'number'
+      ? rawValue
+      : typeof rawValue === 'string'
+      ? Number(rawValue.replace(/\./g, '').replace(',', '.'))
+      : NaN;
+
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`Campo inválido: ${primaryKey}`);
+  }
+
+  return value;
+}
+
+function readEngineeringDocuments(
+  value: JsonValue | undefined,
+): EngineeringRequestDocument[] {
+  if (!Array.isArray(value)) {
+    throw new Error('Campo obrigatório ausente: documents');
+  }
+
+  return value.map((item, index) => {
+    if (!isJsonObject(item)) {
+      throw new Error(`Documento inválido na posição ${index}`);
+    }
+
+    const documentKey = item.documentKey ?? item.chaveDocumento;
+    const filename = item.filename ?? item.name;
+    const contentBase64 = item.contentBase64 ?? item.base64;
+
+    if (typeof documentKey !== 'string' || !documentKey.trim()) {
+      throw new Error(`Chave do documento ausente na posição ${index}`);
+    }
+
+    if (typeof filename !== 'string' || !filename.trim()) {
+      throw new Error(`Nome do documento ausente na posição ${index}`);
+    }
+
+    if (typeof contentBase64 !== 'string' || !contentBase64.trim()) {
+      throw new Error(`Base64 do documento ausente na posição ${index}`);
+    }
+
+    return {
+      documentKey: documentKey.trim(),
       filename: filename.trim(),
       contentBase64,
     };

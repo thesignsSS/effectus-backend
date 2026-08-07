@@ -11,6 +11,7 @@ import { WebQrCodePresenter } from './app/infra/qrcode/web-qr-code.presenter.js'
 import { CompositeStorageClient } from './app/infra/storage/composite-storage.client.js';
 import { LocalFolderStorageClient } from './app/infra/storage/local-folder-storage.client.js';
 import { SupabaseBrokerClientStore } from './app/infra/supabase/supabase-broker-client.store.js';
+import { SupabaseEngineeringRequestStore } from './app/infra/supabase/supabase-engineering-request.store.js';
 import { SupabaseProfileStore } from './app/infra/supabase/supabase-profile.store.js';
 import { SupabaseProposalStore } from './app/infra/supabase/supabase-proposal.store.js';
 import { SupabaseNotificationStore } from './app/infra/supabase/supabase-notification.store.js';
@@ -35,6 +36,7 @@ import { ProcessAdditionalInfoUseCase } from './app/use-cases/process-additional
 import { ExtractDocumentInfoUseCase } from './app/use-cases/extract-document-info.usecase.js';
 import { ProcessIncomingDocumentUseCase } from './app/use-cases/process-incoming-document.usecase.js';
 import { ProcessFormSubmissionUseCase } from './app/use-cases/process-form-submission.usecase.js';
+import { ProcessEngineeringRequestUseCase } from './app/use-cases/process-engineering-request.usecase.js';
 import { RegisterDocumentUseCase } from './app/use-cases/register-document.usecase.js';
 import { env } from './config/env.js';
 
@@ -113,6 +115,10 @@ export function buildApp(): WhatsAppController {
     url: env.supabaseUrl,
     serviceRoleKey: env.supabaseServiceRoleKey,
   });
+  const engineeringRequestStore = new SupabaseEngineeringRequestStore({
+    url: env.supabaseUrl,
+    serviceRoleKey: env.supabaseServiceRoleKey,
+  });
   const notificationStore = new SupabaseNotificationStore({
     url: env.supabaseUrl,
     serviceRoleKey: env.supabaseServiceRoleKey,
@@ -140,6 +146,12 @@ export function buildApp(): WhatsAppController {
     whatsAppService,
     logger,
   );
+  const processEngineeringRequest = new ProcessEngineeringRequestUseCase(
+    oneDriveService,
+    engineeringRequestStore,
+    whatsAppService,
+    logger,
+  );
   const effectusAssistantService = new EffectusAssistantService(
     {
       apiKey: env.openRouterApiKey,
@@ -157,6 +169,8 @@ export function buildApp(): WhatsAppController {
       effectusAppBaseUrl: env.effectusAppBaseUrl,
     },
     processFormSubmission,
+    processEngineeringRequest,
+    engineeringRequestStore,
     profileStore,
     proposalStore,
     oneDriveService,
