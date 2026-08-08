@@ -17,7 +17,7 @@ export type ProposalDocumentScope =
   | 'seller'
   | 'property';
 
-export type ProposalCommentScope = ProposalDocumentScope;
+export type ProposalCommentScope = ProposalDocumentScope | 'email';
 
 export type ProposalCommentType =
   | 'comment'

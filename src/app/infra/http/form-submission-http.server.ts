@@ -355,6 +355,14 @@ export class FormSubmissionHttpServer {
     }
 
     if (
+      request.method === 'POST' &&
+      requestUrl.pathname.match(/^\/api\/proposals\/[^/]+\/send-email$/)
+    ) {
+      await this.handleSendProposalEmail(request, requestUrl, response);
+      return;
+    }
+
+    if (
       request.method === 'DELETE' &&
       requestUrl.pathname.match(/^\/api\/proposals\/[^/]+$/)
     ) {
@@ -1894,6 +1902,84 @@ export class FormSubmissionHttpServer {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error('Falha ao enviar e-mail teste da validação de renda', {
+        error: message,
+        proposalId,
+        brokerUserId,
+      });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
+    }
+  }
+
+  private async handleSendProposalEmail(
+    request: IncomingMessage,
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    let brokerUserId: string | undefined;
+    let proposalId: string | undefined;
+
+    try {
+      const payload = await this.readJsonBody(request);
+      brokerUserId = readRequiredString(payload, 'brokerUserId', 'corretorUserId');
+      proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
+      const to = readRequiredEmailRecipients(payload.to ?? payload.destinatario);
+      const subject = readRequiredString(payload, 'subject', 'assunto');
+      const text = readRequiredString(payload, 'text', 'mensagem');
+
+      const profile = await this.profileStore.getById(brokerUserId);
+
+      if (!profile) {
+        this.sendJson(response, 404, { ok: false, error: 'Usuário não encontrado' });
+        return;
+      }
+
+      if (!profile.isAdmin) {
+        this.sendJson(response, 403, {
+          ok: false,
+          error: 'Apenas administradores podem enviar este e-mail.',
+        });
+        return;
+      }
+
+      const proposal = await this.proposalStore.getById({
+        brokerUserId,
+        proposalId,
+      });
+
+      if (!proposal) {
+        this.sendJson(response, 404, { ok: false, error: 'Proposta não encontrada' });
+        return;
+      }
+
+      this.logger.info('Iniciando envio de e-mail da proposta', {
+        proposalId,
+        brokerUserId,
+        recipients: to,
+        subject,
+      });
+
+      await this.gmailSmtpEmailService.send({ to, subject, text });
+
+      await this.proposalStore.appendAuditComment({
+        proposalId,
+        actorUserId: brokerUserId,
+        actorRole: profile.role,
+        actorName: profile.fullName,
+        message: `E-mail "${subject}" enviado para ${to.map((recipient) => `"${recipient}"`).join(', ')}.`,
+        scope: 'email',
+      });
+
+      this.logger.info('E-mail da proposta enviado com sucesso', {
+        proposalId,
+        brokerUserId,
+        recipients: to,
+        subject,
+      });
+
+      this.sendJson(response, 200, { ok: true, sentTo: to });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao enviar e-mail da proposta', {
         error: message,
         proposalId,
         brokerUserId,

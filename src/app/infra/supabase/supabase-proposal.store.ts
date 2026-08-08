@@ -2162,7 +2162,8 @@ function normalizeCommentScope(value: unknown): ProposalComment['scope'] {
   if (
     value === 'income_validation' ||
     value === 'seller' ||
-    value === 'property'
+    value === 'property' ||
+    value === 'email'
   ) {
     return value;
   }
