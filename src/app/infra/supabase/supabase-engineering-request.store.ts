@@ -481,7 +481,7 @@ function toStatusInfo(status: string | null | undefined): EngineeringRequestStat
   );
 
   if (!option) {
-    return { status: 'pending', statusLabel: 'Pendente' };
+    return { status: 'solicitar_engenharia', statusLabel: 'Solicitar Engenharia' };
   }
 
   return { status: option.value as EngineeringRequestStatus, statusLabel: option.label };

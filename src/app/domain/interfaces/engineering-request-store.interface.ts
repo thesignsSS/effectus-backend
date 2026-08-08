@@ -3,10 +3,11 @@ import type { UserRole } from './profile-store.interface.js';
 export type EngineeringPropertyKind = 'Novo' | 'Usado' | 'Terreno';
 
 export type EngineeringRequestStatus =
-  | 'pending'
-  | 'in_progress'
-  | 'completed'
-  | 'cancelled';
+  | 'solicitar_engenharia'
+  | 'pendencia'
+  | 'boleto_enviado'
+  | 'ordem_servico'
+  | 'engenharia_concluida';
 
 export interface EngineeringRequestStatusInfo {
   status: EngineeringRequestStatus;
@@ -19,10 +20,11 @@ export interface EngineeringRequestStatusOption {
 }
 
 export const ENGINEERING_REQUEST_STATUS_OPTIONS: EngineeringRequestStatusOption[] = [
-  { value: 'pending', label: 'Pendente' },
-  { value: 'in_progress', label: 'Em Andamento' },
-  { value: 'completed', label: 'Concluída' },
-  { value: 'cancelled', label: 'Cancelada' },
+  { value: 'solicitar_engenharia', label: 'Solicitar Engenharia' },
+  { value: 'pendencia', label: 'Pendência' },
+  { value: 'boleto_enviado', label: 'Boleto Enviado' },
+  { value: 'ordem_servico', label: 'OS (Ordem de Serviço)' },
+  { value: 'engenharia_concluida', label: 'Engenharia Concluída' },
 ];
 
 export function formatEngineeringRequestCode(requestNumber: number): string {
