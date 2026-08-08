@@ -1925,6 +1925,7 @@ export class FormSubmissionHttpServer {
       const to = readRequiredEmailRecipients(payload.to ?? payload.destinatario);
       const subject = readRequiredString(payload, 'subject', 'assunto');
       const text = readRequiredString(payload, 'text', 'mensagem');
+      const attachments = readEmailAttachments(payload.attachments);
 
       const profile = await this.profileStore.getById(brokerUserId);
 
@@ -1951,22 +1952,67 @@ export class FormSubmissionHttpServer {
         return;
       }
 
+      const resolvedAttachments = [];
+      const attachmentRefs: { id: string; filename: string }[] = [];
+
+      for (const attachment of attachments) {
+        if (attachment.type === 'proposal_document') {
+          const document = await this.proposalStore.getDocument({
+            brokerUserId,
+            proposalId,
+            documentId: attachment.documentId,
+          });
+
+          if (!document) {
+            throw new Error(`Documento não encontrado: ${attachment.documentId}`);
+          }
+
+          const content = await this.storageService.download(document.storageLocation);
+          const filename = attachment.filename?.trim() || document.originalFilename;
+          resolvedAttachments.push({
+            filename,
+            content,
+            contentType: document.contentType,
+          });
+          attachmentRefs.push({ id: attachment.documentId, filename });
+          continue;
+        }
+
+        resolvedAttachments.push({
+          filename: attachment.filename,
+          content: Buffer.from(attachment.base64Content, 'base64'),
+          contentType: attachment.contentType,
+        });
+      }
+
       this.logger.info('Iniciando envio de e-mail da proposta', {
         proposalId,
         brokerUserId,
         recipients: to,
         subject,
+        attachmentsCount: resolvedAttachments.length,
       });
 
-      await this.gmailSmtpEmailService.send({ to, subject, text });
+      await this.gmailSmtpEmailService.send({
+        to,
+        subject,
+        text,
+        attachments: resolvedAttachments,
+      });
+
+      const attachmentsSuffix =
+        attachmentRefs.length > 0
+          ? ` Anexos: ${attachmentRefs.map((ref) => `"${ref.filename}"`).join(', ')}.`
+          : '';
 
       await this.proposalStore.appendAuditComment({
         proposalId,
         actorUserId: brokerUserId,
         actorRole: profile.role,
         actorName: profile.fullName,
-        message: `E-mail "${subject}" enviado para ${to.map((recipient) => `"${recipient}"`).join(', ')}.`,
+        message: `E-mail "${subject}" enviado para ${to.map((recipient) => `"${recipient}"`).join(', ')}.${attachmentsSuffix}`,
         scope: 'email',
+        attachments: attachmentRefs,
       });
 
       this.logger.info('E-mail da proposta enviado com sucesso', {
@@ -2184,7 +2230,9 @@ export class FormSubmissionHttpServer {
           ? 'seller'
           : rawDocumentScope === 'property'
             ? 'property'
-            : 'proposal';
+            : rawDocumentScope === 'email'
+              ? 'email'
+              : 'proposal';
 
     try {
       const proposal = await this.proposalStore.getProposalContext({

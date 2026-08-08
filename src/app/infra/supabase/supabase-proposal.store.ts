@@ -7,6 +7,7 @@ import {
   DeleteProposalResult,
   DeleteProposalDocumentInput,
   ProposalComment,
+  ProposalCommentAttachment,
   ProposalCommentType,
   ProposalDetail,
   ProposalDocumentContext,
@@ -1308,6 +1309,9 @@ export class SupabaseProposalStore implements ProposalStore {
     const propertyDocuments = allDocuments
       .filter((document) => (document.document_scope ?? 'proposal') === 'property')
       .map(mapDocument);
+    const emailDocuments = allDocuments
+      .filter((document) => (document.document_scope ?? 'proposal') === 'email')
+      .map(mapDocument);
 
     return {
       id: row.id,
@@ -1348,6 +1352,7 @@ export class SupabaseProposalStore implements ProposalStore {
       incomeValidationDocuments,
       sellerDocuments,
       propertyDocuments,
+      emailDocuments,
       guests,
       shareLinkToken: shareLink?.token ?? null,
       pendingInvitations,
@@ -1412,6 +1417,10 @@ export class SupabaseProposalStore implements ProposalStore {
 
     if (scope === 'property') {
       return ' na pasta de imóvel';
+    }
+
+    if (scope === 'email') {
+      return ' na aba de e-mail';
     }
 
     return '';
@@ -1687,6 +1696,7 @@ export class SupabaseProposalStore implements ProposalStore {
     access: { role: UserRole; fullName: string },
     message: string,
     scope: ProposalComment['scope'] = 'proposal',
+    attachments?: ProposalCommentAttachment[],
   ): Promise<void> {
     const currentProposal = await this.getProposalForUpdate(proposalId);
 
@@ -1703,6 +1713,7 @@ export class SupabaseProposalStore implements ProposalStore {
         message,
         type: 'audit',
         scope,
+        attachments,
       }),
     );
 
@@ -1725,6 +1736,7 @@ export class SupabaseProposalStore implements ProposalStore {
     actorName: string;
     message: string;
     scope?: ProposalComment['scope'];
+    attachments?: ProposalCommentAttachment[];
   }): Promise<void> {
     await this.appendProposalAuditComment(
       input.proposalId,
@@ -1735,6 +1747,7 @@ export class SupabaseProposalStore implements ProposalStore {
       },
       input.message,
       input.scope,
+      input.attachments,
     );
   }
 
@@ -2129,6 +2142,7 @@ function normalizeProposalComments(value: unknown): ProposalComment[] {
 
     const type = normalizeCommentType(record.type);
     const scope = normalizeCommentScope(record.scope);
+    const attachments = normalizeCommentAttachments(record.attachments);
 
     return [{
       id: record.id,
@@ -2142,7 +2156,28 @@ function normalizeProposalComments(value: unknown): ProposalComment[] {
       message: record.message,
       type,
       scope,
+      ...(attachments.length > 0 ? { attachments } : {}),
     }];
+  });
+}
+
+function normalizeCommentAttachments(value: unknown): ProposalCommentAttachment[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') {
+      return [];
+    }
+
+    const record = item as Record<string, unknown>;
+
+    if (typeof record.id !== 'string' || typeof record.filename !== 'string') {
+      return [];
+    }
+
+    return [{ id: record.id, filename: record.filename }];
   });
 }
 
@@ -2178,6 +2213,7 @@ function buildProposalComment(input: {
   message: string;
   type: ProposalCommentType;
   scope?: ProposalComment['scope'];
+  attachments?: ProposalCommentAttachment[];
 }): ProposalComment {
   return {
     id: randomUUID(),
@@ -2188,6 +2224,9 @@ function buildProposalComment(input: {
     message: input.message,
     type: input.type,
     scope: input.scope ?? 'proposal',
+    ...(input.attachments && input.attachments.length > 0
+      ? { attachments: input.attachments }
+      : {}),
   };
 }
 

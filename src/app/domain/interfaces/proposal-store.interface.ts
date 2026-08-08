@@ -15,15 +15,21 @@ export type ProposalDocumentScope =
   | 'proposal'
   | 'income_validation'
   | 'seller'
-  | 'property';
+  | 'property'
+  | 'email';
 
-export type ProposalCommentScope = ProposalDocumentScope | 'email';
+export type ProposalCommentScope = ProposalDocumentScope;
 
 export type ProposalCommentType =
   | 'comment'
   | 'pending_reason'
   | 'resubmission'
   | 'audit';
+
+export interface ProposalCommentAttachment {
+  id: string;
+  filename: string;
+}
 
 export interface ProposalComment {
   id: string;
@@ -35,6 +41,7 @@ export interface ProposalComment {
   message: string;
   type: ProposalCommentType;
   scope: ProposalCommentScope;
+  attachments?: ProposalCommentAttachment[];
 }
 
 export type ProposalStatus =
@@ -292,6 +299,7 @@ export interface ProposalDetail {
   incomeValidationDocuments: ProposalDocument[];
   sellerDocuments: ProposalDocument[];
   propertyDocuments: ProposalDocument[];
+  emailDocuments: ProposalDocument[];
   guests: ProposalGuest[];
   shareLinkToken: string | null;
   pendingInvitations: ProposalInvitation[];
@@ -314,6 +322,7 @@ export interface ProposalStore {
     actorName: string;
     message: string;
     scope?: ProposalCommentScope;
+    attachments?: ProposalCommentAttachment[];
   }): Promise<void>;
   countPendingByBroker(input: {
     brokerUserId: string;
