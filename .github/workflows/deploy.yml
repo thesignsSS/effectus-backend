@@ -1,0 +1,52 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  DEPLOY_DIR: /opt/effectus-backend
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, effectus-backend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync checkout into persistent deploy directory
+        # actions/checkout limpa o diretório de trabalho do runner a cada
+        # execução, então o código é copiado por cima do diretório
+        # persistente, preservando .env, auth/ (sessão do WhatsApp), tmp/ e
+        # docs/, que vivem lá sem estar versionados no git.
+        run: |
+          mkdir -p "${{ env.DEPLOY_DIR }}"
+          find "${{ env.DEPLOY_DIR }}" -mindepth 1 -maxdepth 1 \
+            \( -name ".env" -o -name "auth" -o -name "tmp" -o -name "docs" \) -prune \
+            -o -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          cp -a "$GITHUB_WORKSPACE/." "${{ env.DEPLOY_DIR }}/"
+
+      - name: Build image
+        working-directory: ${{ env.DEPLOY_DIR }}
+        run: docker compose build
+
+      - name: Restart container
+        working-directory: ${{ env.DEPLOY_DIR }}
+        run: docker compose up -d
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 15); do
+            if curl -sf http://localhost:3334/ > /dev/null; then
+              echo "OK"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "App did not become healthy" >&2
+          docker logs bot-wpp --tail 100
+          exit 1
