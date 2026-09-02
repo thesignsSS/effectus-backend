@@ -1,4 +1,4 @@
-FROM oven/bun:1 AS builder
+FROM node:22-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -7,13 +7,16 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
-RUN bun install
+# npm ci, not bun install: libsignal is a git dependency (see package-lock.json)
+# and Bun's installer fails to materialize its files into node_modules,
+# leaving node_modules/libsignal without an index.js.
+RUN npm ci
 
 COPY tsconfig.json ./
 COPY src ./src
-RUN bun run build
+RUN npm run build
 
-RUN rm -rf node_modules && bun install --production
+RUN rm -rf node_modules && npm ci --omit=dev
 
 FROM node:22-bookworm-slim AS runner
 
