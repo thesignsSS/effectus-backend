@@ -38,6 +38,7 @@ export interface EngineeringRequestComment {
   authorRole: UserRole;
   createdAt: string;
   message: string;
+  scope?: string;
 }
 
 export interface EngineeringRequestDocumentInput {
@@ -56,6 +57,11 @@ export interface EngineeringRequestDocumentItem {
   contentType: string;
   sizeBytes: number;
   uploadedAt: string;
+  uploadedByName?: string;
+}
+
+export interface EngineeringRequestStoredDocument extends EngineeringRequestDocumentItem {
+  storageLocation: string;
 }
 
 export interface CreateEngineeringRequestInput {
@@ -118,6 +124,13 @@ export interface UpdateEngineeringRequestInput {
   accompanyingName?: string;
   status?: EngineeringRequestStatus;
   commentMessage?: string;
+  commentScope?: string;
+}
+
+export interface AddEngineeringRequestDocumentsInput {
+  requestId: string;
+  brokerUserId: string;
+  documents: EngineeringRequestDocumentInput[];
 }
 
 export interface DeleteEngineeringRequestInput {
@@ -147,6 +160,23 @@ export interface EngineeringRequestStore {
   update(
     input: UpdateEngineeringRequestInput,
   ): Promise<EngineeringRequestStatusInfo | undefined>;
+  addDocuments(input: AddEngineeringRequestDocumentsInput): Promise<void>;
+  getDocument(input: {
+    requestId: string;
+    brokerUserId: string;
+    documentId: string;
+  }): Promise<EngineeringRequestStoredDocument | null>;
+  renameDocument(input: {
+    requestId: string;
+    brokerUserId: string;
+    documentId: string;
+    originalFilename: string;
+  }): Promise<void>;
+  deleteDocument(input: {
+    requestId: string;
+    brokerUserId: string;
+    documentId: string;
+  }): Promise<EngineeringRequestStoredDocument | null>;
   delete(
     input: DeleteEngineeringRequestInput,
   ): Promise<DeleteEngineeringRequestResult | null>;

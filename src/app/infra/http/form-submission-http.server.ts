@@ -21,6 +21,7 @@ import {
   EffectusAssistantService,
 } from '../../services/effectus-assistant.service.js';
 import { GmailSmtpEmailService } from '../../services/gmail-smtp-email.service.js';
+import { ProposalEmailReplySyncService } from '../../services/proposal-email-reply-sync.service.js';
 import { WhatsAppService } from '../../services/whatsapp.service.js';
 import { ChatRealtimeGateway } from './chat-realtime.gateway.js';
 import { WebQrCodePresenter } from '../qrcode/web-qr-code.presenter.js';
@@ -88,6 +89,7 @@ export class FormSubmissionHttpServer {
     private readonly whatsAppService: WhatsAppService,
     private readonly webQrCodePresenter: WebQrCodePresenter,
     private readonly gmailSmtpEmailService: GmailSmtpEmailService,
+    private readonly proposalEmailReplySyncService: ProposalEmailReplySyncService,
     private readonly logger: Logger,
   ) {}
 
@@ -411,6 +413,46 @@ export class FormSubmissionHttpServer {
     }
 
     if (
+      request.method === 'POST' &&
+      requestUrl.pathname.match(/^\/api\/engineering-requests\/[^/]+\/documents$/)
+    ) {
+      await this.handleAddEngineeringRequestDocuments(request, requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'PATCH' &&
+      requestUrl.pathname.match(/^\/api\/engineering-requests\/[^/]+\/documents\/[^/]+$/)
+    ) {
+      await this.handleRenameEngineeringRequestDocument(request, requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'DELETE' &&
+      requestUrl.pathname.match(/^\/api\/engineering-requests\/[^/]+\/documents\/[^/]+$/)
+    ) {
+      await this.handleDeleteEngineeringRequestDocument(requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'GET' &&
+      requestUrl.pathname.match(/^\/api\/engineering-requests\/[^/]+\/documents\/[^/]+\/view$/)
+    ) {
+      await this.handleViewEngineeringRequestDocument(requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'GET' &&
+      requestUrl.pathname.match(/^\/api\/engineering-requests\/[^/]+\/documents\/[^/]+\/download$/)
+    ) {
+      await this.handleDownloadEngineeringRequestDocument(requestUrl, response);
+      return;
+    }
+
+    if (
       request.method === 'PATCH' &&
       requestUrl.pathname.match(/^\/api\/engineering-requests\/[^/]+$/)
     ) {
@@ -635,6 +677,7 @@ export class FormSubmissionHttpServer {
         ),
         status: readOptionalEngineeringStatus(payload),
         commentMessage: readOptionalString(payload, 'commentMessage', 'comentario'),
+        commentScope: readOptionalString(payload, 'commentScope', 'escopoComentario'),
       });
 
       this.sendJson(response, 200, {
@@ -696,6 +739,157 @@ export class FormSubmissionHttpServer {
       });
       this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
     }
+  }
+
+  private async handleAddEngineeringRequestDocuments(
+    request: IncomingMessage,
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    const requestId = getRequiredPathSegment(requestUrl.pathname, 2, 'requestId');
+
+    try {
+      const payload = await this.readJsonBody(request);
+      const brokerUserId = readRequiredString(payload, 'brokerUserId', 'corretorUserId');
+      const documents = readEngineeringDocuments(payload.documents);
+      const engineeringRequest = await this.engineeringRequestStore.getById({
+        requestId,
+        brokerUserId,
+      });
+
+      if (!engineeringRequest?.canEdit) {
+        this.sendJson(response, 403, { ok: false, error: 'Sem permissão para alterar esta solicitação' });
+        return;
+      }
+      const uploadedAt = new Date().toISOString();
+      const uploadedDocuments = [];
+
+      for (const [index, document] of documents.entries()) {
+        const extension = getFileExtension(document.filename);
+        if (!isValidExtension(extension)) {
+          throw new Error(`Extensão inválida no documento: ${document.filename}`);
+        }
+
+        const buffer = Buffer.from(document.contentBase64, 'base64');
+        if (!buffer.length || buffer.toString('base64') !== normalizeBase64(document.contentBase64)) {
+          throw new Error(`Base64 inválido no documento: ${document.filename}`);
+        }
+
+        const filename = `engineering-${requestId}-${Date.now()}-${index + 1}-${sanitizeFileName(document.filename)}`;
+        const storageLocation = await this.storageService.upload(buffer, filename);
+        uploadedDocuments.push({
+          documentKey: document.documentKey,
+          originalFilename: document.filename,
+          storageLocation,
+          contentType: getContentTypeByFilename(filename),
+          sizeBytes: buffer.length,
+          uploadedAt,
+        });
+      }
+
+      await this.engineeringRequestStore.addDocuments({
+        requestId,
+        brokerUserId,
+        documents: uploadedDocuments,
+      });
+      this.sendJson(response, 201, { ok: true, uploadedFiles: uploadedDocuments.length });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao adicionar documentos na solicitação de engenharia', {
+        error: message,
+        requestId,
+      });
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
+    }
+  }
+
+  private async handleRenameEngineeringRequestDocument(
+    request: IncomingMessage,
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    try {
+      const payload = await this.readJsonBody(request);
+      await this.engineeringRequestStore.renameDocument({
+        requestId: getRequiredPathSegment(requestUrl.pathname, 2, 'requestId'),
+        documentId: getRequiredPathSegment(requestUrl.pathname, 4, 'documentId'),
+        brokerUserId: readRequiredString(payload, 'brokerUserId', 'corretorUserId'),
+        originalFilename: readRequiredString(payload, 'originalFilename', 'filename'),
+      });
+      this.sendJson(response, 200, { ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
+    }
+  }
+
+  private async handleDeleteEngineeringRequestDocument(requestUrl: URL, response: ServerResponse): Promise<void> {
+    const brokerUserId = requestUrl.searchParams.get('brokerUserId')?.trim();
+    if (!brokerUserId) {
+      this.sendJson(response, 400, { ok: false, error: 'Campo obrigatório ausente: brokerUserId' });
+      return;
+    }
+
+    try {
+      const document = await this.engineeringRequestStore.deleteDocument({
+        requestId: getRequiredPathSegment(requestUrl.pathname, 2, 'requestId'),
+        documentId: getRequiredPathSegment(requestUrl.pathname, 4, 'documentId'),
+        brokerUserId,
+      });
+      if (!document) {
+        this.sendJson(response, 404, { ok: false, error: 'Documento não encontrado' });
+        return;
+      }
+      await this.storageService.delete(document.storageLocation);
+      this.sendJson(response, 200, { ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.sendJson(response, this.statusFromError(message), { ok: false, error: message });
+    }
+  }
+
+  private async handleViewEngineeringRequestDocument(requestUrl: URL, response: ServerResponse): Promise<void> {
+    const brokerUserId = requestUrl.searchParams.get('brokerUserId')?.trim();
+    if (!brokerUserId) {
+      this.sendJson(response, 400, { ok: false, error: 'Campo obrigatório ausente: brokerUserId' });
+      return;
+    }
+
+    const document = await this.engineeringRequestStore.getDocument({
+      requestId: getRequiredPathSegment(requestUrl.pathname, 2, 'requestId'),
+      documentId: getRequiredPathSegment(requestUrl.pathname, 4, 'documentId'),
+      brokerUserId,
+    });
+    if (!document) {
+      this.sendJson(response, 404, { ok: false, error: 'Documento não encontrado' });
+      return;
+    }
+    const url = await this.storageService.createSignedUrl(document.storageLocation, 3600);
+    this.sendJson(response, 200, { ok: true, url, filename: document.originalFilename });
+  }
+
+  private async handleDownloadEngineeringRequestDocument(requestUrl: URL, response: ServerResponse): Promise<void> {
+    const brokerUserId = requestUrl.searchParams.get('brokerUserId')?.trim();
+    if (!brokerUserId) {
+      this.sendJson(response, 400, { ok: false, error: 'Campo obrigatório ausente: brokerUserId' });
+      return;
+    }
+
+    const document = await this.engineeringRequestStore.getDocument({
+      requestId: getRequiredPathSegment(requestUrl.pathname, 2, 'requestId'),
+      documentId: getRequiredPathSegment(requestUrl.pathname, 4, 'documentId'),
+      brokerUserId,
+    });
+    if (!document) {
+      this.sendJson(response, 404, { ok: false, error: 'Documento não encontrado' });
+      return;
+    }
+    const buffer = await this.storageService.download(document.storageLocation);
+    response.writeHead(200, {
+      'Content-Type': document.contentType || 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${sanitizeFileName(document.originalFilename)}"`,
+    });
+    response.end(buffer);
   }
 
   private async handleGetCurrentProfile(
@@ -1874,13 +2068,14 @@ export class FormSubmissionHttpServer {
         attachmentsCount: resolvedAttachments.length,
       });
 
-      await this.gmailSmtpEmailService.send({
+      const messageIds = await this.gmailSmtpEmailService.send({
         to,
         subject,
         text,
         html,
         attachments: resolvedAttachments,
       });
+      await this.proposalEmailReplySyncService.trackSent({ proposalId, brokerUserId, recipients: to, subject, messageIds });
 
       await this.proposalStore.appendAuditComment({
         proposalId,
@@ -1993,12 +2188,13 @@ export class FormSubmissionHttpServer {
         attachmentsCount: resolvedAttachments.length,
       });
 
-      await this.gmailSmtpEmailService.send({
+      const messageIds = await this.gmailSmtpEmailService.send({
         to,
         subject,
         text,
         attachments: resolvedAttachments,
       });
+      await this.proposalEmailReplySyncService.trackSent({ proposalId, brokerUserId, recipients: to, subject, messageIds });
 
       const attachmentsSuffix =
         attachmentRefs.length > 0
