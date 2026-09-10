@@ -2,12 +2,14 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { randomUUID } from 'node:crypto';
 import {
   CreateEngineeringRequestInput,
+  AddEngineeringRequestDocumentsInput,
   DeleteEngineeringRequestInput,
   DeleteEngineeringRequestResult,
   ENGINEERING_REQUEST_STATUS_OPTIONS,
   EngineeringRequestComment,
   EngineeringRequestDetail,
   EngineeringRequestDocumentItem,
+  EngineeringRequestStoredDocument,
   EngineeringRequestListItem,
   EngineeringRequestListResult,
   EngineeringRequestStatus,
@@ -42,6 +44,8 @@ type EngineeringRequestDocumentRow = {
   content_type: string;
   size_bytes: number;
   uploaded_at: string;
+  uploaded_by_user_id?: string | null;
+  storage_location?: string;
 };
 
 export class SupabaseEngineeringRequestStore implements EngineeringRequestStore {
@@ -96,6 +100,7 @@ export class SupabaseEngineeringRequestStore implements EngineeringRequestStore 
             content_type: document.contentType,
             size_bytes: document.sizeBytes,
             uploaded_at: document.uploadedAt,
+            uploaded_by_user_id: input.brokerUserId,
           })),
         );
 
@@ -193,7 +198,7 @@ export class SupabaseEngineeringRequestStore implements EngineeringRequestStore 
     const { data, error } = await this.client
       .from('engineering_requests')
       .select(
-        'id, request_number, broker_user_id, property_kind, property_value, contact_phone, accompanying_name, status, comments, created_at, engineering_request_documents ( id, document_key, original_filename, content_type, size_bytes, uploaded_at )',
+        'id, request_number, broker_user_id, property_kind, property_value, contact_phone, accompanying_name, status, comments, created_at, engineering_request_documents ( id, document_key, original_filename, content_type, size_bytes, uploaded_at, uploaded_by_user_id )',
       )
       .eq('id', input.requestId)
       .single();
@@ -205,6 +210,9 @@ export class SupabaseEngineeringRequestStore implements EngineeringRequestStore 
     const ownerNames = await this.getProfileNames([data.broker_user_id]);
     const documents = (data.engineering_request_documents ??
       []) as EngineeringRequestDocumentRow[];
+    const uploaderNames = await this.getProfileNames(
+      Array.from(new Set(documents.map((document) => document.uploaded_by_user_id).filter((id): id is string => Boolean(id)))),
+    );
 
     return {
       id: data.id,
@@ -220,7 +228,12 @@ export class SupabaseEngineeringRequestStore implements EngineeringRequestStore 
       contactPhone: data.contact_phone,
       accompanyingName: data.accompanying_name,
       createdAt: data.created_at,
-      documents: documents.map((document) => toDocumentItem(document)),
+      documents: documents.map((document) => ({
+        ...toDocumentItem(document),
+        uploadedByName: document.uploaded_by_user_id
+          ? uploaderNames.get(document.uploaded_by_user_id) ?? 'Usuário'
+          : 'Corretor',
+      })),
       comments: normalizeEngineeringRequestComments(data.comments),
     };
   }
@@ -278,7 +291,7 @@ export class SupabaseEngineeringRequestStore implements EngineeringRequestStore 
 
     if (input.commentMessage && input.commentMessage.trim()) {
       const access = await this.resolveAccess(input.brokerUserId);
-      await this.appendComment(input.requestId, input.brokerUserId, access, input.commentMessage.trim());
+      await this.appendComment(input.requestId, input.brokerUserId, access, input.commentMessage.trim(), input.commentScope);
     }
 
     const { data, error: fetchError } = await this.client
@@ -292,6 +305,101 @@ export class SupabaseEngineeringRequestStore implements EngineeringRequestStore 
     }
 
     return toStatusInfo(data.status);
+  }
+
+  async addDocuments(input: AddEngineeringRequestDocumentsInput): Promise<void> {
+    const requestAccess = await this.resolveRequestAccess(input.requestId, input.brokerUserId);
+
+    if (!requestAccess) {
+      throw new Error('Solicitação de engenharia não encontrada');
+    }
+
+    const { error } = await this.client.from('engineering_request_documents').insert(
+      input.documents.map((document) => ({
+        request_id: input.requestId,
+        document_key: document.documentKey,
+        original_filename: document.originalFilename,
+        storage_location: document.storageLocation,
+        content_type: document.contentType,
+        size_bytes: document.sizeBytes,
+        uploaded_at: document.uploadedAt,
+        uploaded_by_user_id: input.brokerUserId,
+      })),
+    );
+
+    if (error) {
+      throw new Error(`Supabase engineering request documents create failed: ${error.message}`);
+    }
+  }
+
+  async getDocument(input: {
+    requestId: string;
+    brokerUserId: string;
+    documentId: string;
+  }): Promise<EngineeringRequestStoredDocument | null> {
+    const requestAccess = await this.resolveRequestAccess(input.requestId, input.brokerUserId);
+
+    if (!requestAccess) {
+      return null;
+    }
+
+    const { data, error } = await this.client
+      .from('engineering_request_documents')
+      .select('id, document_key, original_filename, storage_location, content_type, size_bytes, uploaded_at, uploaded_by_user_id')
+      .eq('id', input.documentId)
+      .eq('request_id', input.requestId)
+      .maybeSingle();
+
+    if (error || !data || !data.storage_location) {
+      return null;
+    }
+
+    return { ...toDocumentItem(data as EngineeringRequestDocumentRow), storageLocation: data.storage_location };
+  }
+
+  async renameDocument(input: {
+    requestId: string;
+    brokerUserId: string;
+    documentId: string;
+    originalFilename: string;
+  }): Promise<void> {
+    const document = await this.getDocument(input);
+    if (!document) {
+      throw new Error('Documento não encontrado');
+    }
+
+    const { error } = await this.client
+      .from('engineering_request_documents')
+      .update({ original_filename: input.originalFilename })
+      .eq('id', input.documentId)
+      .eq('request_id', input.requestId);
+
+    if (error) {
+      throw new Error(`Supabase engineering request document rename failed: ${error.message}`);
+    }
+  }
+
+  async deleteDocument(input: {
+    requestId: string;
+    brokerUserId: string;
+    documentId: string;
+  }): Promise<EngineeringRequestStoredDocument | null> {
+    const document = await this.getDocument(input);
+    if (!document) {
+      return null;
+    }
+
+    const { error } = await this.client
+      .from('engineering_request_documents')
+      .delete()
+      .eq('id', input.documentId)
+      .eq('request_id', input.requestId);
+
+    if (error) {
+      throw new Error(`Supabase engineering request document delete failed: ${error.message}`);
+    }
+
+    return document;
   }
 
   async delete(
@@ -347,6 +455,7 @@ export class SupabaseEngineeringRequestStore implements EngineeringRequestStore 
     actorUserId: string,
     access: ResolvedAccess,
     message: string,
+    scope?: string,
   ): Promise<void> {
     const { data, error } = await this.client
       .from('engineering_requests')
@@ -366,6 +475,7 @@ export class SupabaseEngineeringRequestStore implements EngineeringRequestStore 
       authorRole: access.role,
       createdAt: new Date().toISOString(),
       message,
+      ...(scope?.trim() ? { scope: scope.trim() } : {}),
     });
 
     const { error: updateError } = await this.client
@@ -520,6 +630,9 @@ function normalizeEngineeringRequestComments(value: unknown): EngineeringRequest
         authorRole: record.authorRole,
         createdAt: record.createdAt,
         message: record.message,
+        ...(typeof record.scope === 'string' && record.scope.trim()
+          ? { scope: record.scope.trim() }
+          : {}),
       },
     ];
   });

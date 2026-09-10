@@ -26,6 +26,7 @@ import { DocumentProcessingQueueService } from './app/services/document-processi
 import { EffectusAssistantService } from './app/services/effectus-assistant.service.js';
 import { FileService } from './app/services/file.service.js';
 import { GmailSmtpEmailService } from './app/services/gmail-smtp-email.service.js';
+import { ProposalEmailReplySyncService } from './app/services/proposal-email-reply-sync.service.js';
 import { ChatService } from './app/services/chat.service.js';
 import { NotificationService } from './app/services/notification.service.js';
 import { RemittanceSessionService } from './app/services/remittance-session.service.js';
@@ -133,6 +134,13 @@ export function buildApp(): WhatsAppController {
     user: env.gmailSmtpUser,
     appPassword: env.gmailSmtpAppPassword,
   });
+  const proposalEmailReplySyncService = new ProposalEmailReplySyncService({
+    user: env.gmailSmtpUser,
+    appPassword: env.gmailSmtpAppPassword,
+    supabaseUrl: env.supabaseUrl,
+    serviceRoleKey: env.supabaseServiceRoleKey,
+  }, proposalStore, logger);
+  proposalEmailReplySyncService.start();
   const chatRealtimeGateway = new ChatRealtimeGateway(
     {
       apiKey: env.formSubmissionApiKey,
@@ -181,6 +189,7 @@ export function buildApp(): WhatsAppController {
     whatsAppService,
     webQrCodePresenter,
     gmailSmtpEmailService,
+    proposalEmailReplySyncService,
     logger,
   ).start();
   const remittanceSessionService = new RemittanceSessionService();
