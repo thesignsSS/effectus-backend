@@ -14,18 +14,18 @@ services:
       TEMP_DIR: /app/tmp/uploads
       LOCAL_DOCUMENTS_ROOT: /app/docs
     volumes:
-      - /opt/effectus-backend/auth:/app/auth
-      - /opt/effectus-backend/tmp:/app/tmp
+      - ${HOST_DATA_DIR:-/opt/effectus-backend}/auth:/app/auth
+      - ${HOST_DATA_DIR:-/opt/effectus-backend}/tmp:/app/tmp
     labels:
       - traefik.enable=true
       - traefik.docker.network=dokploy-network
-      - traefik.http.routers.effectus-bot-web.rule=Host(`api.effectuscb.com`)
-      - traefik.http.routers.effectus-bot-web.entrypoints=web
-      - traefik.http.routers.effectus-bot-web.middlewares=redirect-to-https@file
-      - traefik.http.routers.effectus-bot-websecure.rule=Host(`api.effectuscb.com`)
-      - traefik.http.routers.effectus-bot-websecure.entrypoints=websecure
-      - traefik.http.routers.effectus-bot-websecure.tls.certresolver=letsencrypt
-      - traefik.http.services.effectus-bot.loadbalancer.server.port=3335
+      - traefik.http.routers.${ROUTER_PREFIX:-effectus-bot}-web.rule=Host(`${APP_DOMAIN:-api.effectuscb.com}`)
+      - traefik.http.routers.${ROUTER_PREFIX:-effectus-bot}-web.entrypoints=web
+      - traefik.http.routers.${ROUTER_PREFIX:-effectus-bot}-web.middlewares=redirect-to-https@file
+      - traefik.http.routers.${ROUTER_PREFIX:-effectus-bot}-websecure.rule=Host(`${APP_DOMAIN:-api.effectuscb.com}`)
+      - traefik.http.routers.${ROUTER_PREFIX:-effectus-bot}-websecure.entrypoints=websecure
+      - traefik.http.routers.${ROUTER_PREFIX:-effectus-bot}-websecure.tls.certresolver=letsencrypt
+      - traefik.http.services.${ROUTER_PREFIX:-effectus-bot}.loadbalancer.server.port=3335
     networks:
       - dokploy-network
       - default
