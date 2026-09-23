@@ -48,7 +48,9 @@ export class SupabaseTeamStore implements TeamStore {
 
     const { data, error } = await this.client
       .from('profiles')
-      .select('id, full_name, role, is_active, created_at')
+      .select(
+        'id, full_name, role, is_active, can_view_preferences_insights, created_at',
+      )
       .eq('company_id', context.companyId)
       .order('created_at', { ascending: true });
 
@@ -66,6 +68,8 @@ export class SupabaseTeamStore implements TeamStore {
       role: (row.role === 'admin' ? 'admin' : 'broker') as TeamRole,
       isActive: row.is_active !== false,
       isOwner: row.id === context.ownerId,
+      canViewPreferencesInsights:
+        row.role === 'admin' || row.can_view_preferences_insights === true,
       createdAt: row.created_at,
     }));
 

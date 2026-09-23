@@ -7,6 +7,7 @@ export type TeamMember = {
   role: TeamRole;
   isActive: boolean;
   isOwner: boolean;
+  canViewPreferencesInsights: boolean;
   createdAt: string;
 };
 
