@@ -19,6 +19,7 @@ import {
   formatEngineeringRequestCode,
 } from '../../domain/interfaces/engineering-request-store.interface.js';
 import type { UserRole } from '../../domain/interfaces/profile-store.interface.js';
+import { resolveCompanyIdForRequest, resolveCompanyIdForUser } from './company-scope.js';
 
 export interface SupabaseEngineeringRequestStoreConfig {
   url?: string;
@@ -69,10 +70,13 @@ export class SupabaseEngineeringRequestStore implements EngineeringRequestStore 
   async create(
     input: CreateEngineeringRequestInput,
   ): Promise<{ id: string; requestNumber: number }> {
+    const companyId = await resolveCompanyIdForUser(this.client, input.brokerUserId);
+
     const { data: engineeringRequest, error: requestError } = await this.client
       .from('engineering_requests')
       .insert({
         broker_user_id: input.brokerUserId,
+        company_id: companyId,
         property_kind: input.propertyKind,
         property_value: input.propertyValue,
         contact_phone: input.contactPhone,
@@ -94,6 +98,7 @@ export class SupabaseEngineeringRequestStore implements EngineeringRequestStore 
         .insert(
           input.documents.map((document) => ({
             request_id: engineeringRequest.id,
+            company_id: companyId,
             document_key: document.documentKey,
             original_filename: document.originalFilename,
             storage_location: document.storageLocation,
@@ -314,9 +319,12 @@ export class SupabaseEngineeringRequestStore implements EngineeringRequestStore 
       throw new Error('Solicitação de engenharia não encontrada');
     }
 
+    const companyId = await resolveCompanyIdForRequest(this.client, input.requestId);
+
     const { error } = await this.client.from('engineering_request_documents').insert(
       input.documents.map((document) => ({
         request_id: input.requestId,
+        company_id: companyId,
         document_key: document.documentKey,
         original_filename: document.originalFilename,
         storage_location: document.storageLocation,

@@ -3,6 +3,7 @@ import {
   BrokerClientStore,
   SaveBrokerClientInput,
 } from '../../domain/interfaces/broker-client-store.interface.js';
+import { resolveCompanyIdForUser } from './company-scope.js';
 
 export interface SupabaseBrokerClientStoreConfig {
   url?: string;
@@ -28,9 +29,12 @@ export class SupabaseBrokerClientStore implements BrokerClientStore {
   }
 
   async save(input: SaveBrokerClientInput): Promise<void> {
+    const companyId = await resolveCompanyIdForUser(this.client, input.brokerUserId);
+
     const { error } = await this.client.from('broker_clients').upsert(
       {
         broker_user_id: input.brokerUserId,
+        company_id: companyId,
         broker_name: input.brokerName,
         client_name: input.clientName,
         client_cpf: input.clientCpf ?? null,

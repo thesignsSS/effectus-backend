@@ -28,6 +28,7 @@ import {
   RenameProposalDocumentInput,
   UpdateProposalInput,
 } from '../../domain/interfaces/proposal-store.interface.js';
+import { resolveCompanyIdForProposal, resolveCompanyIdForUser } from './company-scope.js';
 
 export interface SupabaseProposalStoreConfig {
   url?: string;
@@ -145,10 +146,13 @@ export class SupabaseProposalStore implements ProposalStore {
   }
 
   async create(input: CreateProposalInput): Promise<{ id: string; proposalCode: string } & ProposalStatusInfo> {
+    const companyId = await resolveCompanyIdForUser(this.client, input.brokerUserId);
+
     const { data: proposal, error: proposalError } = await this.client
       .from('proposals')
       .insert({
         broker_user_id: input.brokerUserId,
+        company_id: companyId,
         status: 'em_analise',
         broker_name: input.brokerName,
         broker_phone: input.brokerPhone ?? null,
@@ -173,6 +177,7 @@ export class SupabaseProposalStore implements ProposalStore {
       const { error: documentsError } = await this.client.from('proposal_documents').insert(
         input.documents.map((document) => ({
           proposal_id: proposal.id,
+          company_id: companyId,
           filename: document.filename,
           original_filename: document.originalFilename,
           storage_location: document.storageLocation,
@@ -805,9 +810,12 @@ export class SupabaseProposalStore implements ProposalStore {
       throw new Error('Proposta não encontrada');
     }
 
+    const companyId = await resolveCompanyIdForProposal(this.client, input.proposalId);
+
     const { error } = await this.client.from('proposal_documents').insert(
       input.documents.map((document) => ({
         proposal_id: input.proposalId,
+        company_id: companyId,
         filename: document.filename,
         original_filename: document.originalFilename,
         storage_location: document.storageLocation,
@@ -907,11 +915,13 @@ export class SupabaseProposalStore implements ProposalStore {
     }
 
     const token = randomUUID();
+    const companyId = await resolveCompanyIdForProposal(this.client, input.proposalId);
     const { data, error } = await this.client
       .from('proposal_share_links')
       .upsert(
         {
           proposal_id: input.proposalId,
+          company_id: companyId,
           token,
           created_by_user_id: input.brokerUserId,
           revoked_at: null,
@@ -971,11 +981,13 @@ export class SupabaseProposalStore implements ProposalStore {
       throw new Error('Usuário convidado não encontrado');
     }
 
+    const companyId = await resolveCompanyIdForProposal(this.client, input.proposalId);
     const { data, error } = await this.client
       .from('proposal_invitations')
       .upsert(
         {
           proposal_id: input.proposalId,
+          company_id: companyId,
           inviter_user_id: input.brokerUserId,
           invitee_user_id: input.inviteeUserId,
           status: 'pending',
@@ -1071,11 +1083,13 @@ export class SupabaseProposalStore implements ProposalStore {
     }
 
     if (input.action === 'accept') {
+      const companyId = await resolveCompanyIdForProposal(this.client, invitation.proposal_id);
       const { error: collaboratorError } = await this.client
         .from('proposal_collaborators')
         .upsert(
           {
             proposal_id: invitation.proposal_id,
+            company_id: companyId,
             user_id: input.brokerUserId,
           },
           { onConflict: 'proposal_id,user_id', ignoreDuplicates: true },
@@ -1145,11 +1159,13 @@ export class SupabaseProposalStore implements ProposalStore {
       throw new Error('Você já é o dono desta proposta');
     }
 
+    const companyId = await resolveCompanyIdForProposal(this.client, preview.proposalId);
     const { error } = await this.client
       .from('proposal_collaborators')
       .upsert(
         {
           proposal_id: preview.proposalId,
+          company_id: companyId,
           user_id: input.brokerUserId,
         },
         { onConflict: 'proposal_id,user_id', ignoreDuplicates: true },

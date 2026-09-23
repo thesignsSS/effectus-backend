@@ -4,6 +4,7 @@ import {
   NotificationItem,
   NotificationStore,
 } from '../../domain/interfaces/notification-store.interface.js';
+import { resolveCompanyIdForUser } from './company-scope.js';
 
 export interface SupabaseNotificationStoreConfig {
   url?: string;
@@ -45,11 +46,22 @@ export class SupabaseNotificationStore implements NotificationStore {
       return [];
     }
 
+    const uniqueUserIds = [...new Set(input.map((item) => item.userId))];
+    const companyIdByUser = new Map(
+      await Promise.all(
+        uniqueUserIds.map(
+          async (userId) =>
+            [userId, await resolveCompanyIdForUser(this.client, userId)] as const,
+        ),
+      ),
+    );
+
     const { data, error } = await this.client
       .from('notifications')
       .insert(
         input.map((item) => ({
           user_id: item.userId,
+          company_id: companyIdByUser.get(item.userId),
           proposal_id: item.proposalId ?? null,
           conversation_id: item.conversationId ?? null,
           type: item.type,

@@ -2,6 +2,7 @@ import { ImapFlow } from 'imapflow';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { ProposalStore } from '../domain/interfaces/proposal-store.interface.js';
 import { Logger } from '../domain/interfaces/logger.interface.js';
+import { resolveCompanyIdForProposal } from '../infra/supabase/company-scope.js';
 
 type Config = { user?: string; appPassword?: string; supabaseUrl?: string; serviceRoleKey?: string };
 
@@ -20,8 +21,9 @@ export class ProposalEmailReplySyncService {
 
   async trackSent(input: { proposalId: string; brokerUserId: string; recipients: string[]; subject: string; messageIds: string[] }): Promise<void> {
     if (!this.client) return;
+    const companyId = await resolveCompanyIdForProposal(this.client, input.proposalId);
     await this.client.from('proposal_email_messages').upsert(
-      input.messageIds.map((messageId, index) => ({ proposal_id: input.proposalId, broker_user_id: input.brokerUserId, message_id: messageId, recipient: input.recipients[index] ?? input.recipients[0], subject: input.subject })),
+      input.messageIds.map((messageId, index) => ({ proposal_id: input.proposalId, company_id: companyId, broker_user_id: input.brokerUserId, message_id: messageId, recipient: input.recipients[index] ?? input.recipients[0], subject: input.subject })),
       { onConflict: 'message_id' },
     );
   }

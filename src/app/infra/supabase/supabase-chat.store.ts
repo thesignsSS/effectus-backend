@@ -7,6 +7,7 @@ import {
   CreateChatMessageResult,
 } from '../../domain/interfaces/chat-store.interface.js';
 import { UserRole } from '../../domain/interfaces/profile-store.interface.js';
+import { resolveCompanyIdForUser } from './company-scope.js';
 
 export interface SupabaseChatStoreConfig {
   url?: string;
@@ -107,7 +108,8 @@ export class SupabaseChatStore implements ChatStore {
   ): Promise<ChatConversationSummary> {
     await this.assertUsersCanInteract(userId, otherUserId);
 
-    const conversation = await this.upsertDirectConversation(userId, otherUserId);
+    const companyId = await resolveCompanyIdForUser(this.client, userId);
+    const conversation = await this.upsertDirectConversation(userId, otherUserId, companyId);
     const profiles = await this.getProfilesByIds([userId, otherUserId]);
     const counterpart = profiles.get(otherUserId);
 
@@ -175,9 +177,11 @@ export class SupabaseChatStore implements ChatStore {
 
     await this.assertUsersCanInteract(input.senderUserId, input.recipientUserId);
 
+    const companyId = await resolveCompanyIdForUser(this.client, input.senderUserId);
     const conversation = await this.upsertDirectConversation(
       input.senderUserId,
       input.recipientUserId,
+      companyId,
     );
     const now = new Date().toISOString();
 
@@ -185,6 +189,7 @@ export class SupabaseChatStore implements ChatStore {
       .from('chat_messages')
       .insert({
         conversation_id: conversation.id,
+        company_id: companyId,
         sender_user_id: input.senderUserId,
         content,
       })
@@ -214,11 +219,13 @@ export class SupabaseChatStore implements ChatStore {
         [
           {
             conversation_id: conversation.id,
+            company_id: companyId,
             user_id: input.senderUserId,
             last_read_at: now,
           },
           {
             conversation_id: conversation.id,
+            company_id: companyId,
             user_id: input.recipientUserId,
           },
         ],
@@ -457,7 +464,11 @@ export class SupabaseChatStore implements ChatStore {
     return (data as MessageRow[] | null) ?? [];
   }
 
-  private async upsertDirectConversation(userId: string, otherUserId: string) {
+  private async upsertDirectConversation(
+    userId: string,
+    otherUserId: string,
+    companyId: string,
+  ) {
     const [directUserA, directUserB] = [userId, otherUserId].sort((a, b) =>
       a.localeCompare(b),
     );
@@ -468,6 +479,7 @@ export class SupabaseChatStore implements ChatStore {
         {
           direct_user_a: directUserA,
           direct_user_b: directUserB,
+          company_id: companyId,
         },
         { onConflict: 'direct_user_a,direct_user_b' },
       )
@@ -484,8 +496,8 @@ export class SupabaseChatStore implements ChatStore {
       .from('chat_conversation_participants')
       .upsert(
         [
-          { conversation_id: data.id, user_id: directUserA },
-          { conversation_id: data.id, user_id: directUserB },
+          { conversation_id: data.id, company_id: companyId, user_id: directUserA },
+          { conversation_id: data.id, company_id: companyId, user_id: directUserB },
         ],
         { onConflict: 'conversation_id,user_id' },
       );
