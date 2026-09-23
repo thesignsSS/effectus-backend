@@ -13,6 +13,7 @@ import { LocalFolderStorageClient } from './app/infra/storage/local-folder-stora
 import { SupabaseBrokerClientStore } from './app/infra/supabase/supabase-broker-client.store.js';
 import { SupabaseEngineeringRequestStore } from './app/infra/supabase/supabase-engineering-request.store.js';
 import { SupabaseProfileStore } from './app/infra/supabase/supabase-profile.store.js';
+import { SupabaseTeamStore } from './app/infra/supabase/supabase-team.store.js';
 import { SupabaseProposalStore } from './app/infra/supabase/supabase-proposal.store.js';
 import { SupabaseNotificationStore } from './app/infra/supabase/supabase-notification.store.js';
 import { SupabaseChatStore } from './app/infra/supabase/supabase-chat.store.js';
@@ -112,6 +113,10 @@ export function buildApp(): WhatsAppController {
     url: env.supabaseUrl,
     serviceRoleKey: env.supabaseServiceRoleKey,
   });
+  const teamStore = new SupabaseTeamStore({
+    url: env.supabaseUrl,
+    serviceRoleKey: env.supabaseServiceRoleKey,
+  });
   const proposalStore = new SupabaseProposalStore({
     url: env.supabaseUrl,
     serviceRoleKey: env.supabaseServiceRoleKey,
@@ -180,6 +185,7 @@ export function buildApp(): WhatsAppController {
     processEngineeringRequest,
     engineeringRequestStore,
     profileStore,
+    teamStore,
     proposalStore,
     oneDriveService,
     chatService,

@@ -7,6 +7,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { URL } from 'node:url';
 import { Logger } from '../../domain/interfaces/logger.interface.js';
 import { ProfileStore } from '../../domain/interfaces/profile-store.interface.js';
+import { TeamStore } from '../../domain/interfaces/team-store.interface.js';
 import {
   PROPOSAL_STATUS_OPTIONS,
   ProposalStatus,
@@ -80,6 +81,7 @@ export class FormSubmissionHttpServer {
     private readonly processEngineeringRequest: ProcessEngineeringRequestUseCase,
     private readonly engineeringRequestStore: EngineeringRequestStore,
     private readonly profileStore: ProfileStore,
+    private readonly teamStore: TeamStore,
     private readonly proposalStore: ProposalStore,
     private readonly storageService: OneDriveService,
     private readonly chatService: ChatService,
@@ -150,6 +152,32 @@ export class FormSubmissionHttpServer {
       requestUrl.pathname === '/api/profiles/preferences-insights'
     ) {
       await this.handlePreferenceInsights(requestUrl, response);
+      return;
+    }
+
+    if (request.method === 'GET' && requestUrl.pathname === '/api/team') {
+      await this.handleListTeam(requestUrl, response);
+      return;
+    }
+
+    if (request.method === 'POST' && requestUrl.pathname === '/api/team/invite') {
+      await this.handleInviteTeamMember(request, response);
+      return;
+    }
+
+    if (
+      request.method === 'POST' &&
+      requestUrl.pathname.match(/^\/api\/team\/[^/]+\/reset-password$/)
+    ) {
+      await this.handleResetTeamMemberPassword(request, requestUrl, response);
+      return;
+    }
+
+    if (
+      request.method === 'DELETE' &&
+      requestUrl.pathname.match(/^\/api\/team\/[^/]+$/)
+    ) {
+      await this.handleDeleteTeamMember(request, requestUrl, response);
       return;
     }
 
@@ -983,6 +1011,104 @@ export class FormSubmissionHttpServer {
         query,
       });
       this.sendJson(response, 500, { ok: false, error: message });
+    }
+  }
+
+  private async handleListTeam(
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    try {
+      const requesterId = readRequiredSearchParam(requestUrl, 'userId');
+      const result = await this.teamStore.list({ requesterId });
+      this.sendJson(response, 200, result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao listar usuários da empresa', { error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
+    }
+  }
+
+  private async handleInviteTeamMember(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    try {
+      const payload = await this.readJsonBody(request);
+      const requesterId = readRequiredString(payload, 'userId', 'usuarioId');
+      const email = readRequiredString(payload, 'email', 'email');
+      const fullName = readRequiredString(payload, 'fullName', 'nomeCompleto');
+      const role = payload.role === 'admin' ? 'admin' : 'broker';
+
+      const result = await this.teamStore.invite({
+        requesterId,
+        email,
+        fullName,
+        role,
+      });
+
+      this.sendJson(response, 201, result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao convidar usuário', { error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
+    }
+  }
+
+  private async handleResetTeamMemberPassword(
+    request: IncomingMessage,
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    try {
+      const targetUserId = requestUrl.pathname
+        .replace('/api/team/', '')
+        .replace('/reset-password', '')
+        .trim();
+      const payload = await this.readJsonBody(request);
+      const requesterId = readRequiredString(payload, 'userId', 'usuarioId');
+
+      const result = await this.teamStore.resetPassword({
+        requesterId,
+        targetUserId,
+      });
+
+      this.sendJson(response, 200, result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao redefinir senha do usuário', { error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
+    }
+  }
+
+  private async handleDeleteTeamMember(
+    request: IncomingMessage,
+    requestUrl: URL,
+    response: ServerResponse,
+  ): Promise<void> {
+    try {
+      const targetUserId = requestUrl.pathname.replace('/api/team/', '').trim();
+      const requesterId = readRequiredSearchParam(requestUrl, 'userId');
+
+      await this.teamStore.remove({ requesterId, targetUserId });
+
+      this.sendJson(response, 200, { ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Falha ao excluir usuário', { error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
