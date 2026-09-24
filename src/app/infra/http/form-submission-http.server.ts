@@ -634,7 +634,10 @@ export class FormSubmissionHttpServer {
         error: message,
         brokerUserId,
       });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
@@ -965,7 +968,10 @@ export class FormSubmissionHttpServer {
         error: message,
         userId,
       });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
@@ -1011,7 +1017,10 @@ export class FormSubmissionHttpServer {
         userId,
         query,
       });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
@@ -1218,7 +1227,10 @@ export class FormSubmissionHttpServer {
         error: message,
         userId,
       });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
@@ -1323,7 +1335,10 @@ export class FormSubmissionHttpServer {
         error: message,
         brokerUserId,
       });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
@@ -1397,7 +1412,10 @@ export class FormSubmissionHttpServer {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error('Falha ao listar notificações', { error: message, userId });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
@@ -1418,7 +1436,10 @@ export class FormSubmissionHttpServer {
         error: message,
         brokerUserId,
       });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
@@ -1453,7 +1474,10 @@ export class FormSubmissionHttpServer {
         error: message,
         brokerUserId,
       });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
@@ -1525,7 +1549,10 @@ export class FormSubmissionHttpServer {
         userId,
         notificationId,
       });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
@@ -1545,7 +1572,10 @@ export class FormSubmissionHttpServer {
         error: message,
         userId,
       });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
@@ -1561,7 +1591,10 @@ export class FormSubmissionHttpServer {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error('Falha ao listar usuários do chat', { error: message, userId });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
@@ -1577,7 +1610,10 @@ export class FormSubmissionHttpServer {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error('Falha ao listar conversas do chat', { error: message, userId });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
@@ -1833,7 +1869,10 @@ export class FormSubmissionHttpServer {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error('Falha ao listar propostas', { error: message, brokerUserId });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
@@ -1979,7 +2018,10 @@ export class FormSubmissionHttpServer {
         brokerUserId,
         proposalId,
       });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
@@ -2817,7 +2859,10 @@ export class FormSubmissionHttpServer {
         proposalId,
         documentId,
       });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
@@ -2863,7 +2908,10 @@ export class FormSubmissionHttpServer {
         proposalId,
         documentId,
       });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
@@ -2924,7 +2972,10 @@ export class FormSubmissionHttpServer {
         error: message,
         proposalId,
       });
-      this.sendJson(response, 500, { ok: false, error: message });
+      this.sendJson(response, this.statusFromError(message), {
+        ok: false,
+        error: message,
+      });
     }
   }
 
