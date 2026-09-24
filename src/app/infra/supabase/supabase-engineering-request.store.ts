@@ -129,13 +129,15 @@ export class SupabaseEngineeringRequestStore implements EngineeringRequestStore 
     pageSize: number;
   }): Promise<EngineeringRequestListResult> {
     const access = await this.resolveAccess(input.brokerUserId);
+    const companyId = await resolveCompanyIdForUser(this.client, input.brokerUserId);
 
     let query = this.client
       .from('engineering_requests')
       .select(
         'id, request_number, broker_user_id, property_kind, property_value, accompanying_name, status, created_at',
         { count: 'exact' },
-      );
+      )
+      .eq('company_id', companyId);
 
     if (!access.isAdmin) {
       query = query.eq('broker_user_id', input.brokerUserId);
@@ -519,14 +521,21 @@ export class SupabaseEngineeringRequestStore implements EngineeringRequestStore 
     userId: string,
   ): Promise<ResolvedRequestAccess | null> {
     const access = await this.resolveAccess(userId);
+    const requesterCompanyId = await resolveCompanyIdForUser(this.client, userId);
 
     const { data, error } = await this.client
       .from('engineering_requests')
-      .select('broker_user_id')
+      .select('broker_user_id, company_id')
       .eq('id', requestId)
       .maybeSingle();
 
     if (error || !data) {
+      return null;
+    }
+
+    // Fronteira dura entre empresas: nem admin nem dono acessam solicitação de
+    // outra empresa, mesmo sabendo o UUID dela.
+    if (data.company_id !== requesterCompanyId) {
       return null;
     }
 

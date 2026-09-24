@@ -69,9 +69,12 @@ export class SupabaseChatStore implements ChatStore {
       throw new Error('Usuário do chat não encontrado.');
     }
 
+    const companyId = await resolveCompanyIdForUser(this.client, excludeUserId);
+
     let query = this.client
       .from('profiles')
       .select('id, full_name, role, appears_in_chat')
+      .eq('company_id', companyId)
       .eq('is_active', true)
       .neq('id', excludeUserId)
       .eq('appears_in_chat', true)

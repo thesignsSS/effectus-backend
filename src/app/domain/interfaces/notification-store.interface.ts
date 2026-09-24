@@ -33,5 +33,5 @@ export interface NotificationStore {
   listByUser(userId: string): Promise<NotificationItem[]>;
   markAsRead(userId: string, notificationId: string): Promise<void>;
   markAllAsRead(userId: string): Promise<void>;
-  listUserIdsByRole(role: 'admin' | 'broker'): Promise<string[]>;
+  listUserIdsByRole(role: 'admin' | 'broker', proposalId: string): Promise<string[]>;
 }

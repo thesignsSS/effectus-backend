@@ -406,6 +406,7 @@ export class SupabaseProposalStore implements ProposalStore {
     pageSize: number;
   }): Promise<ProposalListResult> {
     const access = await this.resolveAccess(input.brokerUserId);
+    const companyId = await resolveCompanyIdForUser(this.client, input.brokerUserId);
     const sharedProposalIds = access.isAdmin
       ? []
       : await this.listSharedProposalIds(input.brokerUserId);
@@ -420,6 +421,7 @@ export class SupabaseProposalStore implements ProposalStore {
         'id, proposal_number, broker_user_id, status, broker_name, client_name, property_type, created_at',
         { count: 'exact' },
       )
+      .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .range(from, to);
 
@@ -526,12 +528,14 @@ export class SupabaseProposalStore implements ProposalStore {
 
   async countPendingByBroker(input: { brokerUserId: string }): Promise<number> {
     const access = await this.resolveAccess(input.brokerUserId);
+    const companyId = await resolveCompanyIdForUser(this.client, input.brokerUserId);
     const accessibleProposalIds = access.isAdmin
       ? []
       : await this.listAccessibleProposalIds(input.brokerUserId);
     let query = this.client
       .from('proposals')
       .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
       .eq('status', 'pendente');
 
     if (!access.isAdmin) {
@@ -2031,11 +2035,12 @@ export class SupabaseProposalStore implements ProposalStore {
     proposalId: string,
     userId: string,
   ): Promise<ResolvedProposalAccess | null> {
-    const [access, proposalResult] = await Promise.all([
+    const [access, requesterCompanyId, proposalResult] = await Promise.all([
       this.resolveAccess(userId),
+      resolveCompanyIdForUser(this.client, userId),
       this.client
         .from('proposals')
-        .select('id, broker_user_id, broker_name')
+        .select('id, broker_user_id, broker_name, company_id')
         .eq('id', proposalId)
         .single(),
     ]);
@@ -2047,6 +2052,12 @@ export class SupabaseProposalStore implements ProposalStore {
       }
 
       throw new Error(`Supabase proposal access get failed: ${error.message}`);
+    }
+
+    // Fronteira dura entre empresas: nem admin, dono ou colaborador acessam
+    // proposta de outra empresa, mesmo sabendo o UUID dela.
+    if (data.company_id !== requesterCompanyId) {
+      return null;
     }
 
     const isOwner = data.broker_user_id === userId;

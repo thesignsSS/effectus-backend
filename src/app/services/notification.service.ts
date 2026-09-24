@@ -33,7 +33,7 @@ export class NotificationService {
     proposalCode: string;
     brokerName: string;
   }): Promise<NotificationItem[]> {
-    const adminIds = await this.store.listUserIdsByRole('admin');
+    const adminIds = await this.store.listUserIdsByRole('admin', input.proposalId);
 
     return this.store.createMany(
       adminIds.map((userId) => ({
@@ -172,7 +172,7 @@ export class NotificationService {
     type: CreateNotificationInput['type'];
     excludeUserId?: string;
   }): Promise<NotificationItem[]> {
-    const adminIds = await this.store.listUserIdsByRole('admin');
+    const adminIds = await this.store.listUserIdsByRole('admin', input.proposalId);
     const recipients = adminIds.filter((userId) => userId !== input.excludeUserId);
 
     return this.store.createMany(

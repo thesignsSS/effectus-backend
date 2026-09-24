@@ -1145,7 +1145,7 @@ export class FormSubmissionHttpServer {
         return;
       }
 
-      const profiles = await this.profileStore.listPreferenceInsights();
+      const profiles = await this.profileStore.listPreferenceInsights(userId);
       const themeUsageMap = new Map<string, number>();
 
       let usersWithSavedPreferences = 0;

@@ -5,6 +5,7 @@ import {
   UserProfile,
   UserRole,
 } from '../../domain/interfaces/profile-store.interface.js';
+import { resolveCompanyIdForUser } from './company-scope.js';
 
 export interface SupabaseProfileStoreConfig {
   url?: string;
@@ -75,7 +76,8 @@ export class SupabaseProfileStore implements ProfileStore {
       .limit(Math.min(20, Math.max(1, input.limit ?? 10)));
 
     if (input.excludeUserId) {
-      query = query.neq('id', input.excludeUserId);
+      const companyId = await resolveCompanyIdForUser(this.client, input.excludeUserId);
+      query = query.eq('company_id', companyId).neq('id', input.excludeUserId);
     }
 
     const { data, error } = await query;
@@ -115,10 +117,12 @@ export class SupabaseProfileStore implements ProfileStore {
     });
   }
 
-  async listPreferenceInsights(): Promise<UserProfile[]> {
+  async listPreferenceInsights(requesterUserId: string): Promise<UserProfile[]> {
+    const companyId = await resolveCompanyIdForUser(this.client, requesterUserId);
     const { data, error } = await this.client
       .from('profiles')
       .select('id, full_name, role, is_active, appears_in_chat, avatar_path, can_view_preferences_insights, ux_preferences, ux_preferences_updated_at, updated_at')
+      .eq('company_id', companyId)
       .order('full_name', { ascending: true });
 
     if (error) {

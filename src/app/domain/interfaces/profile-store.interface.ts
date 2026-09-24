@@ -34,5 +34,5 @@ export interface ProfileStore {
     excludeUserId?: string;
     limit?: number;
   }): Promise<UserProfile[]>;
-  listPreferenceInsights(): Promise<UserProfile[]>;
+  listPreferenceInsights(requesterUserId: string): Promise<UserProfile[]>;
 }

@@ -4,7 +4,7 @@ import {
   NotificationItem,
   NotificationStore,
 } from '../../domain/interfaces/notification-store.interface.js';
-import { resolveCompanyIdForUser } from './company-scope.js';
+import { resolveCompanyIdForProposal, resolveCompanyIdForUser } from './company-scope.js';
 
 export interface SupabaseNotificationStoreConfig {
   url?: string;
@@ -144,10 +144,12 @@ export class SupabaseNotificationStore implements NotificationStore {
     }
   }
 
-  async listUserIdsByRole(role: 'admin' | 'broker'): Promise<string[]> {
+  async listUserIdsByRole(role: 'admin' | 'broker', proposalId: string): Promise<string[]> {
+    const companyId = await resolveCompanyIdForProposal(this.client, proposalId);
     const { data, error } = await this.client
       .from('profiles')
       .select('id')
+      .eq('company_id', companyId)
       .eq('role', role)
       .eq('is_active', true);
 
