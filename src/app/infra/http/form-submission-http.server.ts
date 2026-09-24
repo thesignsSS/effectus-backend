@@ -21,6 +21,7 @@ import {
   AssistantChatMessage,
   EffectusAssistantService,
 } from '../../services/effectus-assistant.service.js';
+import { EMPRESA_SUSPENSA } from '../supabase/company-scope.js';
 import { GmailSmtpEmailService } from '../../services/gmail-smtp-email.service.js';
 import { ProposalEmailReplySyncService } from '../../services/proposal-email-reply-sync.service.js';
 import { WhatsAppService } from '../../services/whatsapp.service.js';
@@ -2963,7 +2964,10 @@ export class FormSubmissionHttpServer {
     if (
       message.includes('Apenas admin') ||
       message.includes('Sem permissão') ||
-      message.includes('Perfil inativo')
+      message.includes('Perfil inativo') ||
+      // Empresa sem direito de uso (assinatura suspensa ou cancelada). O app
+      // reconhece este mesmo trecho para mostrar a tela de suspensão.
+      message.includes(EMPRESA_SUSPENSA)
     ) {
       return 403;
     }
