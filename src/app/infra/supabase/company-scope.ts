@@ -13,12 +13,50 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  */
 export const EMPRESA_SUSPENSA = 'Empresa suspensa';
 
+type SituacaoEmpresa = {
+  plan?: string | null;
+  status?: string | null;
+  trial_expira_em?: string | null;
+  acesso_ate?: string | null;
+};
+
 /**
- * Status que dão direito de usar o sistema. Espelha `podeUsarSistema` do
- * effectus-api: trial usa normalmente (o cliente paga no fim do período), e
- * `pendente`, `suspensa` e `cancelada` não entram.
+ * Se a empresa pode usar o sistema agora.
+ *
+ * Espelha `temAcesso` de `effectus-api/src/modules/companies/domain/company.ts`.
+ * São serviços separados, sem código compartilhado: mudou lá, mude aqui.
+ *
+ * A data local manda para BLOQUEAR e o webhook manda para LIBERAR, nunca o
+ * contrário: `trial` vale só enquanto a data não passou, mesmo que nenhum
+ * evento de atraso tenha chegado. Assim, falha de integração com o gateway
+ * nunca abre acesso indevido — no máximo fecha antes.
+ *
+ * `interno` passa antes de qualquer olhada em status ou data: é atribuído pela
+ * Effectus e não passa por cobrança.
  */
-const STATUS_COM_ACESSO = new Set(['trial', 'ativa']);
+function temAcesso(empresa: SituacaoEmpresa, agora: Date): boolean {
+  if (empresa.plan === 'interno') return true;
+
+  if (empresa.status === 'trial') {
+    return venceDepoisDe(empresa.trial_expira_em, agora);
+  }
+
+  if (empresa.status === 'ativa') {
+    // Nulo é empresa ativa de antes desta coluna existir: o status manda.
+    return !empresa.acesso_ate || venceDepoisDe(empresa.acesso_ate, agora);
+  }
+
+  return false;
+}
+
+function venceDepoisDe(iso: string | null | undefined, agora: Date): boolean {
+  if (!iso) return false;
+
+  const limite = new Date(iso);
+
+  // Data ilegível não pode virar acesso liberado por acidente.
+  return !Number.isNaN(limite.getTime()) && limite > agora;
+}
 
 /**
  * Resolve a empresa do usuário e, de quebra, barra empresa sem direito de uso.
@@ -36,7 +74,9 @@ export async function resolveCompanyIdForUser(
 ): Promise<string> {
   const { data, error } = await client
     .from('profiles')
-    .select('company_id, companies(status)')
+    .select(
+      'company_id, companies(plan, status, trial_expira_em, acesso_ate)',
+    )
     .eq('id', userId)
     .single();
 
@@ -48,26 +88,26 @@ export async function resolveCompanyIdForUser(
 
   // O embed vem como objeto quando a FK é única, mas o tipo gerado admite
   // array — normalizar evita depender de qual dos dois o cliente devolveu.
-  const empresa = data.companies as unknown;
-  const status = Array.isArray(empresa)
-    ? (empresa[0] as { status?: string } | undefined)?.status
-    : (empresa as { status?: string } | null)?.status;
+  const bruto = data.companies as unknown;
+  const empresa = (
+    Array.isArray(bruto) ? bruto[0] : bruto
+  ) as SituacaoEmpresa | null | undefined;
 
-  if (!status) {
-    // Deixar passar mantém o sistema de pé se a consulta do status quebrar
+  if (!empresa?.status) {
+    // Deixar passar mantém o sistema de pé se a consulta da situação quebrar
     // (cache de schema defasado, por exemplo), mas silenciar transformaria
     // esta trava num no-op invisível — o pior desfecho para um controle de
     // acesso. Se este log aparecer, a trava não está protegendo nada.
     console.error(
-      `[company-scope] status da empresa ${data.company_id} não veio na consulta: a trava de acesso por pagamento está inativa para o usuário ${userId}.`,
+      `[company-scope] situação da empresa ${data.company_id} não veio na consulta: a trava de acesso por pagamento está inativa para o usuário ${userId}.`,
     );
 
     return data.company_id as string;
   }
 
-  if (!STATUS_COM_ACESSO.has(status)) {
+  if (!temAcesso(empresa, new Date())) {
     throw new Error(
-      `${EMPRESA_SUSPENSA}: o acesso está bloqueado (situação: ${status}). Fale com o suporte.`,
+      `${EMPRESA_SUSPENSA}: o acesso está bloqueado (situação: ${empresa.status}). Fale com o suporte.`,
     );
   }
 
