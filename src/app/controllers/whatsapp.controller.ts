@@ -7,6 +7,35 @@ import { ProcessAdditionalInfoUseCase } from '../use-cases/process-additional-in
 import { GenerateCustomerRegistrationReportUseCase } from '../use-cases/generate-customer-registration-report.usecase.js';
 import { ProcessIncomingDocumentUseCase } from '../use-cases/process-incoming-document.usecase.js';
 
+/**
+ * LEGADO — o recebimento de documentos por WhatsApp está DESATIVADO.
+ *
+ * Este canal foi o fluxo original: o cliente do corretor mandava documentos por
+ * WhatsApp e o bot lia, extraía dados e anexava à proposta. Hoje isso acontece
+ * pelo sistema, e o recebimento não é mais usado (confirmado pelo dono do
+ * projeto em 2026-09-25).
+ *
+ * Toda mensagem que chega é respondida com o aviso abaixo e descartada. Nada é
+ * enfileirado, nada é processado, nada é gravado.
+ *
+ * Antes desta mudança o fluxo já estava morto, mas por acidente: nenhum lugar
+ * do código chamava `RemittanceSessionService.start()`, então nunca havia
+ * remessa ativa e todo documento caía no mesmo aviso. Bastava alguém voltar a
+ * criar sessão para revivê-lo sem querer. Agora a recusa é incondicional.
+ *
+ * Consequência disso, se alguém reativar: este caminho identifica a empresa por
+ * `resolveCompanyIdForProposal`, que NÃO checa o status da assinatura. A trava
+ * de acesso por pagamento (em `resolveCompanyIdForUser`) não cobre ele —
+ * empresa suspensa seguiria sendo atendida por aqui. Ver
+ * `effectus-api/docs/prd-trial-cobranca-e-cancelamento.md`.
+ *
+ * O ENVIO de mensagens continua ativo e não é legado: é por ele que saem os
+ * avisos de proposta e de solicitação de engenharia.
+ *
+ * Inalcançáveis a partir daqui, mantidos por ora: `ProcessIncomingDocumentUseCase`,
+ * `ProcessAdditionalInfoUseCase`, `DocumentProcessingQueueService` e
+ * `RemittanceSessionService`.
+ */
 const WHATSAPP_CHANNEL_DEPRECATED_MESSAGE = [
   'Este fluxo de envio por comandos no WhatsApp não está mais ativo.',
   '',
@@ -32,41 +61,21 @@ export class WhatsAppController {
     await this.whatsAppService.connect();
   }
 
+  /**
+   * Responde o aviso e descarta. Não enfileira nem processa — ver o bloco
+   * LEGADO no topo do arquivo.
+   */
   private async handleIncomingMessage(message: IncomingMessage): Promise<void> {
-    if (message.text && !message.hasMedia) {
-      await this.handleTextMessage(message);
-      return;
-    }
-
-    if (!message.hasMedia) {
-      return;
-    }
-
-    const activeRemittance = this.remittanceSessionService.getActive(message.chatId);
-
-    if (!activeRemittance) {
-      this.logger.warn('Documento ignorado sem remessa ativa', {
-        messageId: message.id,
-        chatId: message.chatId,
-      });
-      await this.whatsAppService.sendText(
-        message.chatId,
-        WHATSAPP_CHANNEL_DEPRECATED_MESSAGE,
-      );
-      return;
-    }
-
-    this.processingQueue.enqueue({
-      ...message,
-      remittance: activeRemittance,
-    });
-    this.logger.info('Documento adicionado à fila', {
+    this.logger.info('Mensagem recebida em canal legado do WhatsApp', {
       messageId: message.id,
-      clientName: activeRemittance.clientName,
-      brokerName: activeRemittance.brokerName,
-      active: this.processingQueue.active(),
-      queued: this.processingQueue.size(),
+      chatId: message.chatId,
+      hasMedia: message.hasMedia,
     });
+
+    await this.whatsAppService.sendText(
+      message.chatId,
+      WHATSAPP_CHANNEL_DEPRECATED_MESSAGE,
+    );
   }
 
   async processQueuedMessage(message: IncomingMessage): Promise<void> {
@@ -78,31 +87,6 @@ export class WhatsAppController {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-  }
-
-  private async handleTextMessage(message: IncomingMessage): Promise<void> {
-    const text = message.text?.trim() ?? '';
-    const activeRemittance = this.remittanceSessionService.getActive(message.chatId);
-
-    if (!activeRemittance) {
-      this.logger.info('Mensagem recebida em canal legado do WhatsApp', {
-        messageId: message.id,
-        chatId: message.chatId,
-        hasText: Boolean(text),
-      });
-      await this.whatsAppService.sendText(
-        message.chatId,
-        WHATSAPP_CHANNEL_DEPRECATED_MESSAGE,
-      );
-      return;
-    }
-
-    this.remittanceSessionService.addAdditionalMessage(message.chatId, text);
-    this.logger.info('Informação adicional registrada na remessa', {
-      messageId: message.id,
-      clientName: activeRemittance.clientName,
-      brokerName: activeRemittance.brokerName,
-    });
   }
 
   async processQueuedTextMessage(message: IncomingMessage): Promise<void> {
