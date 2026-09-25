@@ -49,6 +49,18 @@ function temAcesso(empresa: SituacaoEmpresa, agora: Date): boolean {
   return false;
 }
 
+/**
+ * Por que bloqueou. Sem isto a mensagem sairia como "bloqueado (situação:
+ * ativa)", que é contraditório e atrapalha quem for diagnosticar: empresa
+ * `ativa` pode estar bloqueada por o período pago ter acabado.
+ */
+function motivoDoBloqueio(empresa: SituacaoEmpresa): string {
+  if (empresa.status === 'trial') return 'o período de teste terminou';
+  if (empresa.status === 'ativa') return 'o período pago terminou';
+
+  return `a assinatura está ${empresa.status ?? 'sem situação definida'}`;
+}
+
 function venceDepoisDe(iso: string | null | undefined, agora: Date): boolean {
   if (!iso) return false;
 
@@ -107,7 +119,7 @@ export async function resolveCompanyIdForUser(
 
   if (!temAcesso(empresa, new Date())) {
     throw new Error(
-      `${EMPRESA_SUSPENSA}: o acesso está bloqueado (situação: ${empresa.status}). Fale com o suporte.`,
+      `${EMPRESA_SUSPENSA}: ${motivoDoBloqueio(empresa)}. Fale com o suporte.`,
     );
   }
 
