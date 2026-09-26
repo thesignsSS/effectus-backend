@@ -26,6 +26,7 @@ import { GmailSmtpEmailService } from '../../services/gmail-smtp-email.service.j
 import { ProposalEmailReplySyncService } from '../../services/proposal-email-reply-sync.service.js';
 import { WhatsAppService } from '../../services/whatsapp.service.js';
 import { ChatRealtimeGateway } from './chat-realtime.gateway.js';
+import { LeadAdsHttpHandler } from './lead-ads-http.handler.js';
 import { WebQrCodePresenter } from '../qrcode/web-qr-code.presenter.js';
 import {
   FormSubmissionDocument,
@@ -93,6 +94,7 @@ export class FormSubmissionHttpServer {
     private readonly webQrCodePresenter: WebQrCodePresenter,
     private readonly gmailSmtpEmailService: GmailSmtpEmailService,
     private readonly proposalEmailReplySyncService: ProposalEmailReplySyncService,
+    private readonly leadAdsHttpHandler: LeadAdsHttpHandler,
     private readonly logger: Logger,
   ) {}
 
@@ -133,8 +135,17 @@ export class FormSubmissionHttpServer {
       return;
     }
 
+    // Webhook e retorno do OAuth vêm da Meta/navegador, sem a API key do app.
+    if (await this.leadAdsHttpHandler.handlePublic(request, response, requestUrl)) {
+      return;
+    }
+
     if (!this.isAuthorized(request)) {
       this.sendJson(response, 401, { ok: false, error: 'Não autorizado' });
+      return;
+    }
+
+    if (await this.leadAdsHttpHandler.handleAuthorized(request, response, requestUrl)) {
       return;
     }
 
@@ -960,6 +971,7 @@ export class FormSubmissionHttpServer {
         appearsInChat: profile.appearsInChat,
         avatarPath: profile.avatarPath,
         canViewPreferencesInsights: profile.canViewPreferencesInsights,
+        isCompanyOwner: profile.isCompanyOwner === true,
         updatedAt: profile.updatedAt,
       });
     } catch (error) {

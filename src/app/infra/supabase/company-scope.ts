@@ -163,3 +163,32 @@ export async function resolveCompanyIdForRequest(
 
   return data.company_id as string;
 }
+
+/**
+ * Resolve a empresa e exige que o usuário seja o dono dela (quem contratou o
+ * plano). Mais estrito que o `role === 'admin'` usado na gestão de equipe:
+ * admin comum não passa. Também herda a trava de pagamento de
+ * `resolveCompanyIdForUser`.
+ */
+export async function resolveCompanyIdForOwner(
+  client: SupabaseClient,
+  userId: string,
+): Promise<string> {
+  const companyId = await resolveCompanyIdForUser(client, userId);
+
+  const { data, error } = await client
+    .from('companies')
+    .select('owner_id')
+    .eq('id', companyId)
+    .single();
+
+  if (error || !data) {
+    throw new Error(`Empresa não encontrada: ${error?.message ?? companyId}`);
+  }
+
+  if (data.owner_id !== userId) {
+    throw new Error('Sem permissão: apenas o dono da empresa acessa a captação de leads.');
+  }
+
+  return companyId;
+}
