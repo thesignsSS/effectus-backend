@@ -33,7 +33,7 @@ export class SupabaseProfileStore implements ProfileStore {
   async getById(userId: string): Promise<UserProfile | null> {
     const { data, error } = await this.client
       .from('profiles')
-      .select('id, full_name, role, is_active, appears_in_chat, avatar_path, can_view_preferences_insights, ux_preferences, ux_preferences_updated_at, updated_at')
+      .select('id, full_name, role, is_active, appears_in_chat, avatar_path, can_view_preferences_insights, ux_preferences, ux_preferences_updated_at, updated_at, companies(owner_id)')
       .eq('id', userId)
       .single();
 
@@ -46,9 +46,14 @@ export class SupabaseProfileStore implements ProfileStore {
     }
 
     const role = (data.role === 'admin' ? 'admin' : 'broker') as UserRole;
+    // Embed vem como objeto (FK única), mas o tipo gerado admite array.
+    const company = (
+      Array.isArray(data.companies) ? data.companies[0] : data.companies
+    ) as { owner_id?: string | null } | null | undefined;
 
     return {
       id: data.id,
+      isCompanyOwner: Boolean(company?.owner_id) && company?.owner_id === data.id,
       fullName: data.full_name ?? '',
       role,
       isAdmin: role === 'admin',

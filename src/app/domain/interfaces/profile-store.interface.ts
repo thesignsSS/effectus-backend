@@ -22,6 +22,8 @@ export interface UserProfile {
   appearsInChat: boolean;
   avatarPath: string | null;
   canViewPreferencesInsights: boolean;
+  /** Dono da empresa (quem contratou o plano). Só preenchido por `getById`. */
+  isCompanyOwner?: boolean;
   preferencesSnapshot: StoredUserPreferences | null;
   preferencesUpdatedAt: string | null;
   updatedAt: string | null;

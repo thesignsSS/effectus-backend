@@ -41,6 +41,12 @@ import { ProcessFormSubmissionUseCase } from './app/use-cases/process-form-submi
 import { ProcessEngineeringRequestUseCase } from './app/use-cases/process-engineering-request.usecase.js';
 import { RegisterDocumentUseCase } from './app/use-cases/register-document.usecase.js';
 import { env } from './config/env.js';
+import { LeadAdsHttpHandler } from './app/infra/http/lead-ads-http.handler.js';
+import { FakeMetaAdsClient } from './app/infra/meta/fake-meta-ads.client.js';
+import { GraphMetaAdsClient } from './app/infra/meta/graph-meta-ads.client.js';
+import { SupabaseLeadAdsStore } from './app/infra/supabase/supabase-lead-ads.store.js';
+import { LeadAdsService } from './app/services/lead-ads.service.js';
+import { TokenCipher } from './app/utils/token-cipher.js';
 
 export function buildApp(): WhatsAppController {
   const logger = new ConsoleLogger();
@@ -196,6 +202,7 @@ export function buildApp(): WhatsAppController {
     webQrCodePresenter,
     gmailSmtpEmailService,
     proposalEmailReplySyncService,
+    new LeadAdsHttpHandler(buildLeadAdsService(logger), logger),
     logger,
   ).start();
   const remittanceSessionService = new RemittanceSessionService();
@@ -297,6 +304,77 @@ function buildStorageProvider(logger: ConsoleLogger) {
    *
    * return new MockOneDriveClient(env.oneDriveFolder);
    */
+}
+
+// Chave fixa só para o modo fake, onde os tokens também são falsos.
+const FAKE_MODE_TOKEN_KEY = Buffer.alloc(32, 7).toString('base64');
+
+function buildLeadAdsService(logger: ConsoleLogger): LeadAdsService | undefined {
+  if (env.metaAdsProvider !== 'fake' && env.metaAdsProvider !== 'graph') {
+    return undefined;
+  }
+
+  try {
+    const isGraph = env.metaAdsProvider === 'graph';
+
+    if (isGraph) {
+      const missing = [
+        ['META_APP_ID', env.metaAppId],
+        ['META_APP_SECRET', env.metaAppSecret],
+        ['META_TOKEN_ENCRYPTION_KEY', env.metaTokenEncryptionKey],
+        ['META_WEBHOOK_VERIFY_TOKEN', env.metaWebhookVerifyToken],
+        ['META_PRIVACY_POLICY_URL', env.metaPrivacyPolicyUrl],
+        ['EFFECTUS_APP_BASE_URL', env.effectusAppBaseUrl],
+      ]
+        .filter(([, value]) => !value)
+        .map(([name]) => name);
+
+      if (missing.length) {
+        throw new Error(`variáveis ausentes: ${missing.join(', ')}`);
+      }
+    }
+
+    const appSecret = env.metaAppSecret ?? 'fake-app-secret';
+    const metaClient = isGraph
+      ? new GraphMetaAdsClient(
+          {
+            appId: env.metaAppId as string,
+            appSecret,
+            apiVersion: env.metaApiVersion,
+            redirectUri: env.metaOAuthRedirectUri,
+            loginConfigId: env.metaLoginConfigId,
+            specialAdCategories: env.metaSpecialAdCategories,
+          },
+          logger,
+        )
+      : new FakeMetaAdsClient(env.metaOAuthRedirectUri);
+
+    const store = new SupabaseLeadAdsStore(
+      { url: env.supabaseUrl, serviceRoleKey: env.supabaseServiceRoleKey },
+      new TokenCipher(env.metaTokenEncryptionKey ?? FAKE_MODE_TOKEN_KEY),
+    );
+
+    logger.info('Captação de leads (Meta) habilitada', { provider: env.metaAdsProvider });
+
+    return new LeadAdsService(
+      {
+        provider: env.metaAdsProvider,
+        appSecret,
+        webhookVerifyToken: env.metaWebhookVerifyToken,
+        privacyPolicyUrl: env.metaPrivacyPolicyUrl,
+        appReturnUrl: `${(env.effectusAppBaseUrl ?? 'http://localhost:5173').replace(/\/+$/, '')}/captacao`,
+      },
+      store,
+      metaClient,
+      logger,
+    );
+  } catch (error) {
+    // Não derruba o servidor: ele também roda o bot de WhatsApp e o resto da API.
+    logger.error('Captação de leads desativada por configuração inválida', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
 }
 
 function pathFromRoot(relativePath: string): string {

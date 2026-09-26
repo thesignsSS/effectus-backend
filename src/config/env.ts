@@ -5,6 +5,7 @@ dotenv.config();
 type OneDriveProviderMode = 'mock' | 'graph';
 type StorageProviderMode = 'mock' | 'onedrive' | 'supabase';
 type OcrProviderMode = 'disabled' | 'tesseract';
+type MetaAdsProviderMode = 'disabled' | 'fake' | 'graph';
 
 export interface Env {
   nodeEnv: string;
@@ -39,6 +40,16 @@ export interface Env {
   gmailSmtpUser?: string;
   gmailSmtpAppPassword?: string;
   tempDir: string;
+  metaAdsProvider: MetaAdsProviderMode;
+  metaAppId?: string;
+  metaAppSecret?: string;
+  metaApiVersion: string;
+  metaLoginConfigId?: string;
+  metaOAuthRedirectUri: string;
+  metaWebhookVerifyToken?: string;
+  metaTokenEncryptionKey?: string;
+  metaPrivacyPolicyUrl?: string;
+  metaSpecialAdCategories: string[];
 }
 
 const oneDriveProvider = (process.env.ONEDRIVE_PROVIDER ?? 'mock') as OneDriveProviderMode;
@@ -85,4 +96,19 @@ export const env: Env = {
   gmailSmtpUser: process.env.GMAIL_SMTP_USER,
   gmailSmtpAppPassword: process.env.GMAIL_SMTP_APP_PASSWORD,
   tempDir: process.env.TEMP_DIR ?? 'tmp/uploads',
+  metaAdsProvider: (process.env.META_ADS_PROVIDER ?? 'disabled') as MetaAdsProviderMode,
+  metaAppId: process.env.META_APP_ID,
+  metaAppSecret: process.env.META_APP_SECRET,
+  metaApiVersion: process.env.META_API_VERSION ?? 'v23.0',
+  metaLoginConfigId: process.env.META_LOGIN_CONFIG_ID,
+  metaOAuthRedirectUri:
+    process.env.META_OAUTH_REDIRECT_URI ??
+    'http://localhost:3335/api/lead-ads/meta/callback',
+  metaWebhookVerifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN,
+  metaTokenEncryptionKey: process.env.META_TOKEN_ENCRYPTION_KEY,
+  metaPrivacyPolicyUrl: process.env.META_PRIVACY_POLICY_URL,
+  metaSpecialAdCategories: (process.env.META_SPECIAL_AD_CATEGORIES ?? 'HOUSING')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean),
 };
