@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Módulo de Imóveis: requisitos para Anúncios Meta e Leads</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 18mm 16mm; }
+  :root { --ink:#1d2330; --muted:#5b6475; --line:#d9dee7; --accent:#2f5bd3; --soft:#f3f6fc; --warn:#fff6e5; --warnline:#e8b54a; }
+  * { box-sizing: border-box; }
+  body { font-family: "Noto Sans", "DejaVu Sans", sans-serif; color: var(--ink); font-size: 10pt; line-height: 1.45; margin: 0; }
+  h1 { font-size: 20pt; margin: 0 0 4pt; letter-spacing: -0.3px; }
+  h2 { font-size: 13.5pt; margin: 20pt 0 6pt; padding-bottom: 3pt; border-bottom: 2px solid var(--accent); break-after: avoid; }
+  h3 { font-size: 11pt; margin: 12pt 0 4pt; break-after: avoid; }
+  p { margin: 4pt 0 6pt; }
+  .sub { color: var(--muted); font-size: 10pt; margin-bottom: 10pt; }
+  .meta { display:flex; gap:18pt; font-size:9pt; color:var(--muted); border-top:1px solid var(--line); border-bottom:1px solid var(--line); padding:5pt 0; margin: 8pt 0 12pt; }
+  table { width: 100%; border-collapse: collapse; margin: 6pt 0 10pt; font-size: 8.8pt; }
+  th, td { border: 1px solid var(--line); padding: 4pt 5pt; vertical-align: top; text-align: left; }
+  th { background: var(--soft); font-weight: 700; }
+  tr { break-inside: avoid; }
+  .req { font-weight:700; white-space:nowrap; }
+  .ob { color:#b3261e; } .de { color:#9a6700; } .op { color:var(--muted); }
+  .box { background: var(--soft); border-left: 4px solid var(--accent); padding: 7pt 9pt; margin: 8pt 0; break-inside: avoid; }
+  .warn { background: var(--warn); border-left-color: var(--warnline); }
+  code { font-family: "DejaVu Sans Mono", monospace; font-size: 8.3pt; background:#eef1f6; padding: 0 2pt; border-radius: 2px; }
+  pre { font-family: "DejaVu Sans Mono", monospace; font-size: 7.8pt; background:#f4f6fa; border:1px solid var(--line); padding:7pt; white-space: pre-wrap; break-inside: avoid; }
+  ul, ol { margin: 3pt 0 6pt 16pt; padding: 0; } li { margin: 1.5pt 0; }
+  .legend span { margin-right: 12pt; }
+  .flow { display:grid; grid-template-columns: repeat(6, 1fr); gap:5pt; margin: 8pt 0; }
+  .flow div { border:1px solid var(--line); border-radius:4pt; padding:5pt; font-size:8.3pt; background:#fff; }
+  .flow b.t { display:block; color: var(--accent); font-size:8.8pt; margin-bottom:2pt; }
+  .check td:first-child { width: 16pt; text-align:center; }
+  .pb { break-before: page; }
+</style>
+</head>
+<body>
+
+<h1>Módulo de Imóveis</h1>
+<div class="sub">O que o módulo de <b>Anúncios Meta + Captação de Leads</b> precisa que o cadastro de imóveis tenha</div>
+<div class="meta"><span><b>Para:</b> Marina</span><span><b>De:</b> Diego</span><span><b>Data:</b> 30/09/2026</span><span><b>Base:</b> SPEC Técnica v2: EffectusHub, Integração Meta Ads</span></div>
+
+<h2>1. Contexto</h2>
+<p>A SPEC Técnica v2 prevê que corretores/empresas criem campanhas de Facebook e Instagram <b>a partir de um imóvel cadastrado no CRM</b> (§1). O imóvel é o centro do fluxo: gera o anúncio, define onde ele é exibido, aparece na landing page, fica ligado ao lead e segue para a análise de crédito na CCA (Correspondente CAIXA Aqui).</p>
+<p>Hoje o EffectusHub não tem cadastro de imóveis. A proposta só guarda <i>tipo</i>, <i>UF</i> e <i>município</i>. Este documento lista <b>o mínimo e o recomendado</b> para o módulo de Imóveis atender o de Anúncios/Leads, além das <b>regras de comportamento</b> que não são "campos", mas que o módulo precisa respeitar.</p>
+<div class="box">O que <b>não</b> fica no imóvel: orçamento, período, público, CCA e textos específicos de cada anúncio. Isso é da <b>campanha</b>. Um mesmo imóvel pode ter várias campanhas.</div>
+
+<h2>2. Onde o imóvel é usado no fluxo</h2>
+<div class="flow">
+  <div><b class="t">1. Campanha</b>O corretor escolhe o imóvel. A campanha guarda <code>property_id</code> (§7.2).</div>
+  <div><b class="t">2. Anúncio</b>Título, texto e fotos viram o criativo enviado à Meta (§13.1).</div>
+  <div><b class="t">3. Público</b>A localização define onde o anúncio é exibido: cidade/raio (§12).</div>
+  <div><b class="t">4. Landing page</b>Página pública do EffectusHub mostra o imóvel e confere se ele ainda está disponível (§14.2).</div>
+  <div><b class="t">5. Lead</b>O lead fica ligado a campanha, <b>imóvel</b>, corretor e CCA (§1, §7.4).</div>
+  <div><b class="t">6. CCA</b>Dados do imóvel vão com o lead para a análise de crédito (§15).</div>
+</div>
+
+<h2>3. Campos</h2>
+<p class="legend"><span class="req ob">Obrigatório</span> sem ele o fluxo não funciona · <span class="req de">Recomendado</span> melhora muito o anúncio, a landing ou a análise · <span class="req op">Opcional</span> pode vir depois</p>
+
+<h3>3.1 Identificação e controle</h3>
+<table>
+<tr><th style="width:22%">Campo</th><th style="width:17%">Formato</th><th style="width:11%">Nível</th><th style="width:18%">Usado em</th><th>Observação</th></tr>
+<tr><td>ID</td><td>UUID</td><td class="req ob">Obrigatório</td><td>Campanha, lead</td><td>Referência estável. Nunca muda.</td></tr>
+<tr><td>Empresa (<code>company_id</code>)</td><td>UUID</td><td class="req ob">Obrigatório</td><td>Tudo</td><td>Isolamento: uma empresa nunca vê nem anuncia imóvel de outra (§19).</td></tr>
+<tr><td>Código de referência</td><td>texto curto, único por empresa</td><td class="req de">Recomendado</td><td>CRM, relatórios</td><td>Ex.: "AP-0132". Ajuda o corretor a identificar o imóvel sem abrir o cadastro.</td></tr>
+<tr><td>Corretor responsável</td><td>ID de usuário da empresa</td><td class="req de">Recomendado</td><td>Campanha</td><td>Sugere automaticamente o corretor da campanha, que é quem recebe os leads (§7.2 <code>broker_id</code>).</td></tr>
+<tr><td>Criado em / atualizado em</td><td>data-hora</td><td class="req ob">Obrigatório</td><td>Auditoria, snapshot</td><td>O módulo de anúncios usa o <i>atualizado em</i> para saber se o imóvel mudou depois do anúncio publicado.</td></tr>
+<tr><td>Arquivado</td><td>sim/não + data</td><td class="req ob">Obrigatório</td><td>Histórico</td><td><b>Não excluir de verdade</b> imóvel ligado a campanha ou lead. Arquivar esconde da lista, mas mantém a referência.</td></tr>
+</table>
+
+<h3>3.2 Situação (disponibilidade)</h3>
+<table>
+<tr><th style="width:22%">Campo</th><th style="width:17%">Formato</th><th style="width:11%">Nível</th><th style="width:18%">Usado em</th><th>Observação</th></tr>
+<tr><td>Status</td><td>lista fixa: <i>rascunho, disponível, reservado, vendido, inativo</i></td><td class="req ob">Obrigatório</td><td>Campanha, landing page</td><td>Só imóvel <b>disponível</b> pode ser anunciado. A landing page recusa lead de imóvel que deixou de estar disponível (§14.2, passo 11). Ver regra 4.1.</td></tr>
+</table>
+
+<h3>3.3 Classificação</h3>
+<table>
+<tr><th style="width:22%">Campo</th><th style="width:17%">Formato</th><th style="width:11%">Nível</th><th style="width:18%">Usado em</th><th>Observação</th></tr>
+<tr><td>Tipo do imóvel</td><td>lista: apartamento, casa, casa em condomínio, terreno, sala/loja…</td><td class="req ob">Obrigatório</td><td>Anúncio, landing</td><td>Aparece no texto ("Apartamento 2 quartos…") e em filtros.</td></tr>
+<tr><td>Condição</td><td>lista: <b>Novo, Usado, Adjudicado Caixa</b></td><td class="req ob">Obrigatório</td><td>CCA, proposta</td><td><b>Usar exatamente a mesma lista que a Proposta já usa</b> ("Tipo do Imóvel" na tela de Nova Proposta), para o lead virar proposta sem conversão.</td></tr>
+<tr><td>Empreendimento / construtora</td><td>texto</td><td class="req op">Opcional</td><td>Anúncio, landing, CCA</td><td>Relevante para imóvel novo (lançamento, planta).</td></tr>
+</table>
+
+<h3>3.4 Conteúdo (textos)</h3>
+<table>
+<tr><th style="width:22%">Campo</th><th style="width:17%">Formato</th><th style="width:11%">Nível</th><th style="width:18%">Usado em</th><th>Observação</th></tr>
+<tr><td>Título</td><td>texto, até ~40 caracteres</td><td class="req ob">Obrigatório</td><td>Headline do anúncio, título da landing</td><td>A Meta corta headlines longas; ~40 caracteres é o limite prático. Ex.: "Apartamento 2 quartos no Marco".</td></tr>
+<tr><td>Chamada curta</td><td>texto, até ~125 caracteres</td><td class="req ob">Obrigatório</td><td>Texto principal do anúncio</td><td>É o trecho visível antes do "ver mais" no Instagram/Facebook.</td></tr>
+<tr><td>Descrição completa</td><td>texto longo</td><td class="req de">Recomendado</td><td>Landing page</td><td>Sem limite rígido. Ver cuidados de linguagem na regra 4.6.</td></tr>
+<tr><td>Destaques</td><td>lista de itens curtos</td><td class="req op">Opcional</td><td>Landing, anúncio</td><td>Ex.: "Pronto para morar", "Aceita FGTS", "Lazer completo".</td></tr>
+</table>
+
+<h3>3.5 Localização</h3>
+<table>
+<tr><th style="width:22%">Campo</th><th style="width:17%">Formato</th><th style="width:11%">Nível</th><th style="width:18%">Usado em</th><th>Observação</th></tr>
+<tr><td>UF</td><td>sigla</td><td class="req ob">Obrigatório</td><td>Público, CCA, proposta</td><td>Mesma lista da Proposta.</td></tr>
+<tr><td>Município</td><td>nome + código IBGE</td><td class="req ob">Obrigatório</td><td>Público, CCA, proposta</td><td>Mesma lista de municípios da Proposta. O código IBGE evita erro de grafia ao buscar a cidade na Meta.</td></tr>
+<tr><td>Bairro</td><td>texto</td><td class="req de">Recomendado</td><td>Anúncio, landing</td><td>É o que o comprador mais procura; costuma ir no título.</td></tr>
+<tr><td>Latitude / longitude</td><td>números decimais</td><td class="req de">Recomendado</td><td>Público</td><td>Permite anunciar num <b>raio a partir do imóvel</b>, e não do centro da cidade. Pode ser obtido do endereço automaticamente.</td></tr>
+<tr><td>Endereço completo + CEP</td><td>texto</td><td class="req op">Opcional</td><td>Interno</td><td><b>Dado privado</b>: nunca vai para anúncio nem landing sem autorização (regra 4.4).</td></tr>
+<tr><td>Exibir endereço na landing?</td><td>sim/não (padrão: não)</td><td class="req ob">Obrigatório se houver endereço</td><td>Landing</td><td>Decisão explícita do corretor/dono.</td></tr>
+</table>
+
+<h3>3.6 Valores e financiamento</h3>
+<table>
+<tr><th style="width:22%">Campo</th><th style="width:17%">Formato</th><th style="width:11%">Nível</th><th style="width:18%">Usado em</th><th>Observação</th></tr>
+<tr><td>Preço de venda</td><td>valor em R$</td><td class="req de">Recomendado</td><td>Landing, CCA</td><td>A CCA precisa do valor para simular o financiamento. Guardar em centavos para não haver arredondamento.</td></tr>
+<tr><td>Exibir preço publicamente?</td><td>sim/não</td><td class="req de">Recomendado</td><td>Landing, anúncio</td><td>Muitos corretores preferem "consulte".</td></tr>
+<tr><td>Valor de avaliação</td><td>valor em R$</td><td class="req op">Opcional</td><td>CCA</td><td>Dado interno, útil na análise de crédito. Nunca público.</td></tr>
+<tr><td>Aceita financiamento</td><td>sim/não</td><td class="req de">Recomendado</td><td>Landing, CCA</td><td>O fluxo termina em análise de crédito; imóvel que não financia não deveria gerar lead para a CCA.</td></tr>
+<tr><td>Enquadramento MCMV / faixa</td><td>lista</td><td class="req op">Opcional</td><td>Landing, CCA</td><td>Ajuda a qualificar o lead antes de ir para a CCA.</td></tr>
+<tr><td>Aceita FGTS</td><td>sim/não</td><td class="req op">Opcional</td><td>Landing, CCA</td><td></td></tr>
+</table>
+
+<h3>3.7 Características</h3>
+<table>
+<tr><th style="width:22%">Campo</th><th style="width:17%">Formato</th><th style="width:11%">Nível</th><th style="width:18%">Usado em</th><th>Observação</th></tr>
+<tr><td>Quartos · suítes · banheiros · vagas</td><td>números inteiros</td><td class="req de">Recomendado</td><td>Anúncio, landing</td><td>"2 quartos, 1 vaga" é a informação mais usada em texto de anúncio.</td></tr>
+<tr><td>Área privativa · área total</td><td>m²</td><td class="req de">Recomendado</td><td>Landing</td><td></td></tr>
+<tr><td>Andar · condomínio mensal · IPTU</td><td>número / R$</td><td class="req op">Opcional</td><td>Landing</td><td></td></tr>
+</table>
+
+<h3>3.8 Mídia (fotos e vídeo)</h3>
+<table>
+<tr><th style="width:22%">Campo</th><th style="width:17%">Formato</th><th style="width:11%">Nível</th><th style="width:18%">Usado em</th><th>Observação</th></tr>
+<tr><td>Fotos</td><td>lista ordenada de arquivos</td><td class="req ob">Obrigatório (≥ 1 para anunciar)</td><td>Anúncio, landing</td><td>Sem foto não existe anúncio. Pode cadastrar o imóvel sem foto, mas ele não aparece como "pronto para anunciar".</td></tr>
+<tr><td>Foto de capa</td><td>marcação em uma das fotos</td><td class="req ob">Obrigatório</td><td>Anúncio</td><td>É a imagem usada no anúncio por padrão.</td></tr>
+<tr><td>Ordem</td><td>número</td><td class="req ob">Obrigatório</td><td>Landing</td><td>Ordem da galeria.</td></tr>
+<tr><td>Legenda / texto alternativo</td><td>texto curto</td><td class="req op">Opcional</td><td>Landing</td><td>Acessibilidade.</td></tr>
+<tr><td>Vídeo</td><td>arquivo MP4</td><td class="req op">Opcional (fase 2)</td><td>Anúncio</td><td>A SPEC prevê vídeo (<code>video_id</code>), mas o primeiro ciclo pode ser só com imagem.</td></tr>
+</table>
+<div class="box"><b>Requisitos técnicos das fotos</b> (recomendação da Meta para Feed/Stories):
+<ul>
+<li>Formato <b>JPG ou PNG</b>, até 30 MB.</li>
+<li>Tamanho ideal <b>1080 × 1080</b> (quadrada) ou <b>1080 × 1350</b> (vertical 4:5, feed). Para Stories/Reels, <b>1080 × 1920</b> (9:16). Mínimo aceitável: 600 px de largura.</li>
+<li>Pouco ou nenhum texto escrito sobre a imagem (a entrega do anúncio piora).</li>
+<li>Guardar o <b>arquivo original</b>, sem compressão agressiva. O módulo de anúncios envia o original para a Meta. A landing page pode usar versões reduzidas.</li>
+<li>Sugestão: o cadastro já valida a resolução mínima e avisa quando a proporção não serve para anúncio.</li>
+</ul></div>
+
+<h2>4. Regras de comportamento (além dos campos)</h2>
+
+<h3>4.1 Mudança de disponibilidade precisa avisar os anúncios</h3>
+<p>Quando o imóvel sai de <i>disponível</i> (reservado, vendido, inativo, arquivado):</p>
+<ul>
+<li>as campanhas ativas dele devem ser <b>pausadas</b> (para não gastar dinheiro anunciando imóvel vendido);</li>
+<li>a landing page passa a <b>recusar novos leads</b> e mostra "imóvel indisponível" (§14.2).</li>
+</ul>
+<p><b>O que o módulo de Imóveis precisa oferecer:</b> um aviso (evento/gancho) sempre que o status mudar, com o ID do imóvel, o status antigo e o novo. Se isso não for possível, o módulo de anúncios consulta o status periodicamente, mas aí a pausa demora.</p>
+
+<h3>4.2 Anúncio publicado usa uma "fotografia" do imóvel</h3>
+<p>Quando a campanha é publicada, a Meta revisa e congela o anúncio. Editar o imóvel depois <b>não altera</b> o anúncio que está no ar; para isso é preciso criar um criativo novo, que passa por nova revisão. Por isso o módulo de anúncios guarda uma cópia dos dados usados (título, texto, foto, preço exibido).</p>
+<p><b>O que o módulo de Imóveis precisa oferecer:</b> o <i>atualizado em</i> confiável. Com ele, a tela da campanha pode avisar "o imóvel mudou desde a publicação; deseja atualizar o anúncio?".</p>
+
+<h3>4.3 Não excluir imóvel com histórico</h3>
+<p>Campanhas e leads guardam o ID do imóvel para sempre (rastreabilidade e auditoria, §1 e §19). Imóvel com campanha ou lead ligado só pode ser <b>arquivado</b>.</p>
+
+<h3>4.4 Separar dado público de dado interno</h3>
+<p>A landing page é pública e o anúncio é visto por qualquer pessoa. O cadastro precisa deixar claro o que pode sair:</p>
+<table>
+<tr><th style="width:50%">Pode ir para anúncio/landing</th><th>Nunca sai do sistema</th></tr>
+<tr><td>Título, chamada, descrição, destaques, tipo, condição, bairro, cidade/UF, características, fotos, preço (se "exibir preço" = sim), endereço (se "exibir endereço" = sim)</td><td>Dados do proprietário (nome, CPF, telefone), endereço exato (se não autorizado), valor de avaliação, observações internas, comissão, documentos do imóvel</td></tr>
+</table>
+<p>Se o cadastro tiver dados do proprietário, eles são dados pessoais (LGPD) e ficam restritos ao CRM.</p>
+
+<h3>4.5 Permissões e empresa</h3>
+<ul>
+<li>Todo imóvel pertence a <b>uma empresa</b>. Nenhuma consulta pode trazer imóvel de outra empresa (§19).</li>
+<li>Decisão atual para anúncios: só <b>dono e admin</b> criam campanhas. Falta definir <b>quem cadastra e edita imóveis</b>: só dono/admin, ou também o corretor?</li>
+</ul>
+
+<h3>4.6 Anúncio de imóvel tem regras especiais na Meta</h3>
+<p>A Meta trata anúncios de imóveis como <b>categoria especial de moradia</b> (a SPEC alerta sobre isso em §10.1 e §12). Quando a categoria se aplica:</p>
+<ul>
+<li>o público só pode ser segmentado por <b>localização com raio mínimo de ~25 km</b>; idade, gênero e CEP não são permitidos. Por isso a <b>localização do imóvel</b> é o dado mais importante para o público;</li>
+<li>os textos <b>não podem ter linguagem discriminatória</b> ou que exclua grupos (ex.: "ideal para casal jovem", "sem crianças"). Vale uma orientação no campo de descrição do cadastro.</li>
+</ul>
+
+<h2>5. Como o módulo de anúncios vai consumir o imóvel</h2>
+<p>Independente de como o módulo de Imóveis for construído, o módulo de anúncios precisa destas três operações, sempre limitadas à empresa de quem está logado:</p>
+<ol>
+<li><b>Listar imóveis anunciáveis</b>: status <i>disponível</i>, com ao menos 1 foto e capa definida. Com busca por título, código e bairro.</li>
+<li><b>Buscar um imóvel por ID</b>: todos os campos públicos + preço/condição para a CCA + lista de fotos.</li>
+<li><b>Obter o arquivo de uma foto</b>: o original, para enviar à Meta.</li>
+</ol>
+<p>E de um <b>aviso de mudança de status</b> (regra 4.1). Exemplo do dado esperado:</p>
+<pre>{
+  "id": "7d1c…",
+  "companyId": "b75b…",
+  "referenceCode": "AP-0132",
+  "status": "disponivel",
+  "propertyKind": "apartamento",
+  "condition": "Novo",                // mesma lista da Proposta
+  "title": "Apartamento 2 quartos no Marco",
+  "shortText": "Pronto para morar, lazer completo, aceita FGTS. Agende sua visita!",
+  "description": "…",
+  "highlights": ["Pronto para morar", "Aceita FGTS"],
+  "location": { "uf": "PA", "city": "Belém", "ibgeCode": "1501402",
+                "neighborhood": "Marco", "lat": -1.4336, "lng": -48.4661,
+                "showAddress": false },
+  "price": { "saleCents": 32000000, "showPrice": true,
+             "acceptsFinancing": true, "acceptsFgts": true, "mcmvTier": "faixa 2" },
+  "features": { "bedrooms": 2, "suites": 1, "bathrooms": 2, "parking": 1, "privateAreaM2": 58 },
+  "brokerId": "eb07…",
+  "photos": [ { "id": "…", "order": 1, "isCover": true, "width": 1080, "height": 1350, "alt": "Sala" } ],
+  "updatedAt": "2026-09-30T14:02:00Z"
+}</pre>
+
+<h2>6. Resumo: campo × onde é usado</h2>
+<table>
+<tr><th>Campo</th><th>Anúncio</th><th>Público</th><th>Landing</th><th>Lead</th><th>CCA</th></tr>
+<tr><td>ID, empresa</td><td></td><td></td><td>●</td><td>●</td><td>●</td></tr>
+<tr><td>Status</td><td>●</td><td></td><td>●</td><td></td><td></td></tr>
+<tr><td>Tipo, condição</td><td>●</td><td></td><td>●</td><td></td><td>●</td></tr>
+<tr><td>Título, chamada</td><td>●</td><td></td><td>●</td><td></td><td></td></tr>
+<tr><td>Descrição, destaques</td><td>○</td><td></td><td>●</td><td></td><td></td></tr>
+<tr><td>UF, município</td><td></td><td>●</td><td>●</td><td></td><td>●</td></tr>
+<tr><td>Bairro, lat/long</td><td>○</td><td>●</td><td>●</td><td></td><td></td></tr>
+<tr><td>Preço, financiamento, FGTS, MCMV</td><td>○</td><td></td><td>●</td><td></td><td>●</td></tr>
+<tr><td>Características</td><td>○</td><td></td><td>●</td><td></td><td></td></tr>
+<tr><td>Fotos + capa</td><td>●</td><td></td><td>●</td><td></td><td></td></tr>
+<tr><td>Corretor responsável</td><td></td><td></td><td></td><td>●</td><td>●</td></tr>
+</table>
+<p style="font-size:8.5pt;color:var(--muted)">● usado diretamente · ○ usado quando preenchido</p>
+
+<h2>7. Perguntas em aberto para a Marina</h2>
+<ol>
+<li>Quem cadastra e edita imóveis: só dono/admin, ou o corretor também?</li>
+<li>Os imóveis vêm só de cadastro manual ou haverá importação (planilha, portal, construtora)?</li>
+<li>O cadastro guarda dados do proprietário? Se sim, quem pode ver?</li>
+<li>Qual a lista final de tipos de imóvel e de status? A lista de status acima atende?</li>
+<li>O preço é sempre de venda, ou existe aluguel? (A SPEC fala em análise de crédito, então assumimos <b>só venda</b>.)</li>
+<li>Um imóvel pode ter mais de um corretor responsável?</li>
+<li>Empreendimentos com várias unidades (lançamentos) são um imóvel por unidade ou um "empreendimento" com unidades?</li>
+</ol>
+
+<h2>8. Referências na SPEC Técnica v2</h2>
+<p>§1 Escopo · §7.2 <code>campaigns.property_id</code> · §7.4 <code>leads.property_id</code> · §10.1 categoria especial · §12 público e categorias especiais · §13 criativo e URL · §14.2 validação de disponibilidade do imóvel · §15 roteamento para CCA · §19 segurança, isolamento e LGPD.</p>
+
+</body>
+</html>
