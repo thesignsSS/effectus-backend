@@ -55,6 +55,11 @@ import {
 import { SupabaseAuthContextResolver } from './app/modules/auth/auth-context.js';
 import { RequestAuthenticator } from './app/modules/auth/request-authenticator.js';
 import { IdentityGuard } from './app/modules/auth/identity-guard.js';
+import { PropertyService } from './app/modules/properties/application/property.service.js';
+import { PropertiesRouter } from './app/modules/properties/http/properties.router.js';
+import { IbgeMunicipalityDirectory } from './app/modules/properties/infra/ibge-municipality.directory.js';
+import { SupabasePropertyRepository } from './app/modules/properties/infra/supabase-property.repository.js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 export function buildApp(): WhatsAppController {
   const logger = new ConsoleLogger();
@@ -161,7 +166,13 @@ export function buildApp(): WhatsAppController {
     serviceRoleKey: env.supabaseServiceRoleKey,
   }, proposalStore, logger);
   proposalEmailReplySyncService.start();
-  const authenticator = buildAuthenticator(logger);
+  const serviceClient = buildServiceClient();
+  const authenticator = buildAuthenticator(serviceClient, logger);
+  const propertyService = new PropertyService(
+    new SupabasePropertyRepository(serviceClient),
+    new IbgeMunicipalityDirectory(logger),
+    logger,
+  );
   const chatRealtimeGateway = new ChatRealtimeGateway(authenticator, logger);
   const processFormSubmission = new ProcessFormSubmissionUseCase(
     oneDriveService,
@@ -211,6 +222,7 @@ export function buildApp(): WhatsAppController {
     proposalEmailReplySyncService,
     new LeadAdsHttpHandler(buildLeadAdsService(logger), logger),
     logger,
+    [new PropertiesRouter(propertyService, logger)],
   ).start();
   const remittanceSessionService = new RemittanceSessionService();
   const customerRegistrationExtractor = new OpenRouterCustomerRegistrationClient(
@@ -313,15 +325,18 @@ function buildStorageProvider(logger: ConsoleLogger) {
    */
 }
 
-function buildAuthenticator(logger: ConsoleLogger): RequestAuthenticator {
+/** Cliente com a service role, compartilhado pela autenticação e pelos módulos novos. */
+function buildServiceClient(): SupabaseClient {
   if (!env.supabaseUrl || !env.supabaseServiceRoleKey) {
     throw new Error('SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY são obrigatórios para autenticar a API');
   }
 
-  const client = createClient(env.supabaseUrl, env.supabaseServiceRoleKey, {
+  return createClient(env.supabaseUrl, env.supabaseServiceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+}
 
+function buildAuthenticator(client: SupabaseClient, logger: ConsoleLogger): RequestAuthenticator {
   if (!env.supabaseJwtSecret) {
     logger.warn('SUPABASE_JWT_SECRET ausente: JWT validado no Supabase a cada sessão nova (mais lento)');
   }

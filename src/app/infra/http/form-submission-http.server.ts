@@ -7,6 +7,7 @@ import { URL } from 'node:url';
 import { applyCors } from '../../modules/auth/cors.js';
 import { IdentityGuard, routeLabel } from '../../modules/auth/identity-guard.js';
 import { RequestAuthenticator } from '../../modules/auth/request-authenticator.js';
+import type { ModuleRouter } from '../../modules/http/module-http.js';
 import { Logger } from '../../domain/interfaces/logger.interface.js';
 import { ProfileStore } from '../../domain/interfaces/profile-store.interface.js';
 import { TeamStore } from '../../domain/interfaces/team-store.interface.js';
@@ -100,6 +101,8 @@ export class FormSubmissionHttpServer {
     private readonly proposalEmailReplySyncService: ProposalEmailReplySyncService,
     private readonly leadAdsHttpHandler: LeadAdsHttpHandler,
     private readonly logger: Logger,
+    /** Módulos novos (imóvel, vendedor, anúncios): só com JWT, nunca com a chave antiga. */
+    private readonly moduleRouters: ModuleRouter[] = [],
   ) {}
 
   start(): void {
@@ -166,6 +169,12 @@ export class FormSubmissionHttpServer {
     }
 
     if (auth.kind === 'user') {
+      for (const router of this.moduleRouters) {
+        if (await router.handle(request, response, requestUrl, auth.context)) {
+          return;
+        }
+      }
+
       this.identityGuard.applyToSearchParams(
         requestUrl.searchParams,
         auth.context,
