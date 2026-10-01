@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { PermissionDenied, definePolicy, sameCompany } from '../../src/app/modules/auth/permissions.js';
+import {
+  CompanySuspended,
+  PermissionDenied,
+  definePolicy,
+  requireActiveCompany,
+  sameCompany,
+} from '../../src/app/modules/auth/permissions.js';
 import type { AuthContext } from '../../src/app/modules/auth/auth-context.js';
 import { context } from './helpers.js';
 
@@ -29,5 +35,18 @@ describe('definePolicy', () => {
 
   it('assert lança PermissionDenied', () => {
     expect(() => policy.assert(context({ userId: 'user-c' }), 'edit', ownResource)).toThrow(PermissionDenied);
+  });
+
+  it('empresa sem direito de uso: can() nega e assert() avisa a suspensão (403 no app)', () => {
+    const suspended = context({ isAdmin: true, companyBlockedReason: 'o período pago terminou' });
+
+    expect(policy.can(suspended, 'view', ownResource)).toBe(false);
+    expect(() => policy.assert(suspended, 'view', ownResource)).toThrow(/^Empresa suspensa: o período pago terminou/);
+    expect(() => requireActiveCompany(suspended)).toThrow(CompanySuspended);
+  });
+
+  it('requireActiveCompany devolve a empresa do token', () => {
+    expect(requireActiveCompany(context())).toBe('company-a');
+    expect(() => requireActiveCompany(context({ companyId: null }))).toThrow(PermissionDenied);
   });
 });

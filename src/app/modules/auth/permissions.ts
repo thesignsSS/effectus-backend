@@ -1,3 +1,4 @@
+import { EMPRESA_SUSPENSA } from '../../infra/supabase/company-scope.js';
 import type { AuthContext } from './auth-context.js';
 
 /**
@@ -18,6 +19,25 @@ export class PermissionDenied extends Error {
   }
 }
 
+/** Mensagem com `EMPRESA_SUSPENSA`: o app reconhece o trecho e mostra a tela de suspensão. */
+export class CompanySuspended extends Error {
+  constructor(reason: string) {
+    super(`${EMPRESA_SUSPENSA}: ${reason}. Fale com o suporte.`);
+    this.name = 'CompanySuspended';
+  }
+}
+
+/**
+ * Exige empresa no perfil e com direito de uso. Toda rota dos módulos novos
+ * passa por aqui antes de qualquer regra de domínio.
+ */
+export function requireActiveCompany(context: AuthContext): string {
+  if (!context.companyId) throw new PermissionDenied('company');
+  if (context.companyBlockedReason) throw new CompanySuspended(context.companyBlockedReason);
+
+  return context.companyId;
+}
+
 export function definePolicy<Actions extends Record<string, PolicyRule<never>>>(rules: Actions) {
   return {
     can<A extends keyof Actions & string>(
@@ -25,8 +45,8 @@ export function definePolicy<Actions extends Record<string, PolicyRule<never>>>(
       action: A,
       resource: Parameters<Actions[A]>[1],
     ): boolean {
-      // Todo dado é de uma empresa: sem empresa no perfil, nada é permitido.
-      if (!context.companyId) return false;
+      // Todo dado é de uma empresa: sem empresa ativa no perfil, nada é permitido.
+      if (!context.companyId || context.companyBlockedReason) return false;
 
       return (rules[action] as PolicyRule<Parameters<Actions[A]>[1]>)(context, resource);
     },
@@ -36,6 +56,8 @@ export function definePolicy<Actions extends Record<string, PolicyRule<never>>>(
       action: A,
       resource: Parameters<Actions[A]>[1],
     ): void {
+      requireActiveCompany(context);
+
       if (!this.can(context, action, resource)) throw new PermissionDenied(action);
     },
   };

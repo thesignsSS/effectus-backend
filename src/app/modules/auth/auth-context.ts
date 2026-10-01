@@ -1,4 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import {
+  motivoDoBloqueio,
+  temAcesso,
+  type SituacaoEmpresa,
+} from '../../infra/supabase/company-scope.js';
 import type { VerifiedToken } from './jwt-verifier.js';
 
 /**
@@ -15,16 +20,27 @@ export type AuthContext = {
   isAdmin: boolean;
   /** Dono da empresa: quem contratou o plano. */
   isOwner: boolean;
+  /**
+   * Motivo pelo qual a empresa está sem direito de uso (assinatura suspensa,
+   * teste vencido), ou nulo se pode usar. Mesma regra de `company-scope.ts`.
+   */
+  companyBlockedReason: string | null;
 };
 
 export interface AuthContextResolver {
   resolve(token: VerifiedToken): Promise<AuthContext>;
 }
 
+type ProfileRow = {
+  company_id: string | null;
+  role: string | null;
+  companies: (SituacaoEmpresa & { owner_id: string | null }) | (SituacaoEmpresa & { owner_id: string | null })[] | null;
+};
+
 /**
- * Porta de `SupabaseAuthGuard.resolverContexto` do `effectus-api`. Cacheado por
- * pouco tempo porque roda a cada requisição: mudança de papel ou de empresa
- * leva no máximo `ttlMs` para valer.
+ * Porta de `SupabaseAuthGuard.resolverContexto` do `effectus-api`, somando a
+ * trava de pagamento. Cacheado por pouco tempo porque roda a cada requisição:
+ * mudança de papel, empresa ou assinatura leva no máximo `ttlMs` para valer.
  */
 export class SupabaseAuthContextResolver implements AuthContextResolver {
   private readonly cache = new Map<string, { value: AuthContext; expiresAt: number }>();
@@ -42,31 +58,27 @@ export class SupabaseAuthContextResolver implements AuthContextResolver {
 
     const { data: profile, error } = await this.client
       .from('profiles')
-      .select('company_id, role')
+      .select('company_id, role, companies(owner_id, plan, status, trial_expira_em, acesso_ate)')
       .eq('id', token.userId)
-      .maybeSingle<{ company_id: string | null; role: string | null }>();
+      .maybeSingle<ProfileRow>();
 
     if (error) throw new Error(`Falha ao carregar perfil: ${error.message}`);
 
+    // O embed vem como objeto quando a FK é única, mas o tipo admite array.
+    const company = Array.isArray(profile?.companies) ? profile.companies[0] : profile?.companies;
     const companyId = profile?.company_id ?? null;
-    let isOwner = false;
-
-    if (companyId) {
-      const { data: company } = await this.client
-        .from('companies')
-        .select('owner_id')
-        .eq('id', companyId)
-        .maybeSingle<{ owner_id: string | null }>();
-
-      isOwner = company?.owner_id === token.userId;
-    }
 
     const value: AuthContext = {
       userId: token.userId,
       email: token.email,
       companyId,
       isAdmin: profile?.role === 'admin',
-      isOwner,
+      isOwner: Boolean(company?.owner_id) && company?.owner_id === token.userId,
+      // Sem status na consulta, deixa passar como `resolveCompanyIdForUser`:
+      // derrubar todo mundo por um cache de schema defasado seria pior.
+      companyBlockedReason: company?.status && !temAcesso(company, new Date(this.now()))
+        ? motivoDoBloqueio(company)
+        : null,
     };
 
     this.cache.set(token.userId, { value, expiresAt: this.now() + this.ttlMs });

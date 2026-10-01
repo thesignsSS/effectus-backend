@@ -34,6 +34,7 @@ export function context(overrides: Partial<AuthContext> = {}): AuthContext {
     companyId: 'company-a',
     isAdmin: false,
     isOwner: false,
+    companyBlockedReason: null,
     ...overrides,
   };
 }
