@@ -3,5 +3,5 @@ dist/
 .env
 tmp/
 docs/
-auth/
+/auth/
 *.log

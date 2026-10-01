@@ -47,6 +47,14 @@ import { GraphMetaAdsClient } from './app/infra/meta/graph-meta-ads.client.js';
 import { SupabaseLeadAdsStore } from './app/infra/supabase/supabase-lead-ads.store.js';
 import { LeadAdsService } from './app/services/lead-ads.service.js';
 import { TokenCipher } from './app/utils/token-cipher.js';
+import { createClient } from '@supabase/supabase-js';
+import {
+  Hs256TokenVerifier,
+  SupabaseRemoteTokenVerifier,
+} from './app/modules/auth/jwt-verifier.js';
+import { SupabaseAuthContextResolver } from './app/modules/auth/auth-context.js';
+import { RequestAuthenticator } from './app/modules/auth/request-authenticator.js';
+import { IdentityGuard } from './app/modules/auth/identity-guard.js';
 
 export function buildApp(): WhatsAppController {
   const logger = new ConsoleLogger();
@@ -60,6 +68,7 @@ export function buildApp(): WhatsAppController {
   const webQrCodePresenter = new WebQrCodePresenter(
     {
       port: env.qrCodeWebPort,
+      host: env.qrCodeWebHost,
       frontendDir: pathFromRoot('frontend'),
       loadDocuments: hasListDocuments(storageProvider)
         ? () => storageProvider.listDocuments()
@@ -152,12 +161,8 @@ export function buildApp(): WhatsAppController {
     serviceRoleKey: env.supabaseServiceRoleKey,
   }, proposalStore, logger);
   proposalEmailReplySyncService.start();
-  const chatRealtimeGateway = new ChatRealtimeGateway(
-    {
-      apiKey: env.formSubmissionApiKey,
-    },
-    logger,
-  );
+  const authenticator = buildAuthenticator(logger);
+  const chatRealtimeGateway = new ChatRealtimeGateway(authenticator, logger);
   const processFormSubmission = new ProcessFormSubmissionUseCase(
     oneDriveService,
     brokerClientStore,
@@ -184,9 +189,11 @@ export function buildApp(): WhatsAppController {
     {
       port: env.formSubmissionHttpPort,
       maxBodyBytes: env.formSubmissionMaxBodyMb * 1024 * 1024,
-      apiKey: env.formSubmissionApiKey,
       effectusAppBaseUrl: env.effectusAppBaseUrl,
+      corsAllowedOrigins: env.corsAllowedOrigins,
     },
+    authenticator,
+    new IdentityGuard(env.identityMode, logger),
     processFormSubmission,
     processEngineeringRequest,
     engineeringRequestStore,
@@ -304,6 +311,32 @@ function buildStorageProvider(logger: ConsoleLogger) {
    *
    * return new MockOneDriveClient(env.oneDriveFolder);
    */
+}
+
+function buildAuthenticator(logger: ConsoleLogger): RequestAuthenticator {
+  if (!env.supabaseUrl || !env.supabaseServiceRoleKey) {
+    throw new Error('SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY são obrigatórios para autenticar a API');
+  }
+
+  const client = createClient(env.supabaseUrl, env.supabaseServiceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  if (!env.supabaseJwtSecret) {
+    logger.warn('SUPABASE_JWT_SECRET ausente: JWT validado no Supabase a cada sessão nova (mais lento)');
+  }
+
+  if (env.acceptLegacyApiKey) {
+    logger.warn('Chave compartilhada antiga ainda aceita (ACCEPT_LEGACY_API_KEY): desligar após migrar o app');
+  }
+
+  return new RequestAuthenticator(
+    { legacyApiKey: env.formSubmissionApiKey, acceptLegacyApiKey: env.acceptLegacyApiKey },
+    env.supabaseJwtSecret
+      ? new Hs256TokenVerifier(env.supabaseJwtSecret)
+      : new SupabaseRemoteTokenVerifier(client),
+    new SupabaseAuthContextResolver(client),
+  );
 }
 
 // Chave fixa só para o modo fake, onde os tokens também são falsos.
