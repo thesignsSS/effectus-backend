@@ -76,6 +76,13 @@ export class PropertiesRouter implements ModuleRouter {
         return await this.handlePhotos(request, response, method, photoRoute, context);
       }
 
+      const statusId = matchId(pathname, '/api/properties/', '/status');
+      if (method === 'POST' && statusId) {
+        const body = await readJson(request);
+        sendJson(response, 200, { ok: true, property: await this.service.changeStatus(context, statusId, body.status) });
+        return true;
+      }
+
       const historyId = matchId(pathname, '/api/properties/', '/history');
       if (method === 'GET' && historyId) {
         sendJson(response, 200, { ok: true, items: await this.service.history(context, historyId) });

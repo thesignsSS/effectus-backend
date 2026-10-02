@@ -33,6 +33,19 @@ export const PROPERTY_STATUS_LABELS: Record<PropertyStatus, string> = {
   inativo: 'Inativo',
 };
 
+/**
+ * Situações que o corretor responsável escolhe à mão (10.4). "Em proposta" e
+ * "Vendido" vêm das propostas; só o ADM os escolhe à mão. Segue a regra 10.4;
+ * a tabela da seção 4 é mais restrita (não lista, por exemplo, Em negociação
+ * → Disponível) — divergência levada à spec. [PROVISÓRIO]
+ */
+export const MANUAL_STATUSES_FOR_RESPONSIBLE: readonly PropertyStatus[] = [
+  'disponivel',
+  'em_negociacao',
+  'reservado',
+  'inativo',
+];
+
 /** Vendido e Inativo impedem novo uso em proposta ou engenharia (4.1). */
 export const STATUSES_BLOCKING_NEW_USE: readonly PropertyStatus[] = ['vendido', 'inativo'];
 

@@ -3,14 +3,19 @@ import type { Logger } from '../../../domain/interfaces/logger.interface.js';
 import type { AuthContext } from '../../auth/auth-context.js';
 import { requireActiveCompany } from '../../auth/permissions.js';
 import type { MunicipalityDirectory } from '../domain/municipality-directory.js';
+import { adReadinessLabel, computeAdReadiness, type AdReadiness } from '../domain/ad-readiness.js';
+import type { PropertyPhotoRepository } from '../domain/property-photo-ports.js';
 import {
+  MANUAL_STATUSES_FOR_RESPONSIBLE,
+  PROPERTY_STATUSES,
   PROPERTY_STATUS_LABELS,
   PROPERTY_TYPE_LABELS,
+  type PropertyStatus,
   type Property,
   type PropertyEvent,
   type PropertyInput,
 } from '../domain/property.js';
-import { propertyPolicy } from '../domain/property-policy.js';
+import { isCompanyAdmin, propertyPolicy } from '../domain/property-policy.js';
 import {
   DuplicateReferenceCode,
   type CompanyBroker,
@@ -47,6 +52,9 @@ export type PropertyView = Property & {
   typeLabel: string;
   statusLabel: string;
   responsibleBroker: { id: string; name: string | null };
+  /** Presente quando o serviço tem acesso às fotos (detalhe e lista). */
+  adReadiness?: AdReadiness;
+  adReadinessLabel?: string;
   permissions: {
     canEdit: boolean;
     canChangeStatus: boolean;
@@ -60,12 +68,54 @@ export type PropertyView = Property & {
 
 const REFERENCE_CODE_ATTEMPTS = 5;
 
+export type PropertyHistoryItem = PropertyEvent & { actorName: string | null };
+
 export class PropertyService {
   constructor(
     private readonly repository: PropertyRepository,
     private readonly municipalities: MunicipalityDirectory,
     private readonly logger: Logger,
+    private readonly photos?: PropertyPhotoRepository,
   ) {}
+
+  /**
+   * Mudança manual de situação (10.3 e 10.4). Responsável escolhe entre
+   * Disponível, Em negociação, Reservado e Inativo; o ADM escolhe qualquer
+   * uma. Toda mudança fica no histórico com anterior, nova, autor e hora (4.4).
+   * A escolha do ADM vale até a próxima mudança automática (decisão 3).
+   */
+  async changeStatus(context: AuthContext, id: string, status: unknown): Promise<PropertyView> {
+    const property = await this.load(context, id);
+    propertyPolicy.assert(context, 'changeStatus', property);
+
+    if (!PROPERTY_STATUSES.includes(status as PropertyStatus)) {
+      throw new PropertyValidationError({ status: 'Escolha uma situação da lista' });
+    }
+
+    const next = status as PropertyStatus;
+    if (!isCompanyAdmin(context) && !MANUAL_STATUSES_FOR_RESPONSIBLE.includes(next)) {
+      throw new PropertyValidationError({
+        status: 'Em proposta e Vendido mudam pelas propostas. Só o administrador escolhe essas situações à mão',
+      });
+    }
+
+    if (next === property.status) return this.toView(context, property);
+
+    const updated = await this.repository.update(property.companyId, property.id, {
+      status: next,
+      updatedBy: context.userId,
+    });
+
+    await this.repository.addEvent({
+      companyId: property.companyId,
+      propertyId: property.id,
+      kind: 'status_changed',
+      actorId: context.userId,
+      data: { from: property.status, to: next },
+    });
+
+    return this.toView(context, updated);
+  }
 
   /** Seção 8: cadastra só com o essencial; nasce Disponível com quem cadastrou de responsável. */
   async create(context: AuthContext, input: PropertyInput): Promise<PropertyView> {
@@ -161,11 +211,18 @@ export class PropertyService {
     return this.toView(context, updated, responsible ?? undefined);
   }
 
-  async history(context: AuthContext, id: string): Promise<PropertyEvent[]> {
+  /** Histórico do imóvel, mais recente primeiro, com o nome de quem fez ("Sistema" = nulo). */
+  async history(context: AuthContext, id: string): Promise<PropertyHistoryItem[]> {
     const property = await this.load(context, id);
     propertyPolicy.assert(context, 'view', property);
 
-    return this.repository.listEvents(property.companyId, property.id);
+    const [events, brokers] = await Promise.all([
+      this.repository.listEvents(property.companyId, property.id),
+      this.repository.listBrokers(property.companyId),
+    ]);
+    const names = new Map(brokers.map((broker) => [broker.id, broker.fullName]));
+
+    return events.map((event) => ({ ...event, actorName: event.actorId ? (names.get(event.actorId) ?? null) : null }));
   }
 
   /** Corretores da empresa para escolher o responsável (8.9). */
@@ -295,9 +352,26 @@ export class PropertyService {
   private async toView(context: AuthContext, property: Property, responsible?: CompanyBroker): Promise<PropertyView> {
     const broker = responsible ?? (await this.repository.findBroker(property.companyId, property.responsibleBrokerId));
     const can = (action: Parameters<typeof propertyPolicy.can>[1]) => propertyPolicy.can(context, action, property);
+    const summary = this.photos
+      ? ((await this.photos.summaries(property.companyId, [property.id])).get(property.id) ?? { count: 0, coverPath: null })
+      : null;
+    const readiness = summary
+      ? computeAdReadiness({
+          status: property.status,
+          typology: property.ad?.typology ?? null,
+          title: property.ad?.title ?? null,
+          headline: property.ad?.headline ?? null,
+          municipality: property.address.municipality,
+          state: property.address.state,
+          photoCount: summary.count,
+          hasCover: Boolean(summary.coverPath),
+        })
+      : undefined;
 
     return {
       ...property,
+      adReadiness: readiness,
+      adReadinessLabel: readiness ? adReadinessLabel(readiness) : undefined,
       // Observações internas e avaliação ficam visíveis a todo o time por
       // enquanto (seção 5 + decisão 17, pendente de privacidade).
       typeLabel: PROPERTY_TYPE_LABELS[property.type],

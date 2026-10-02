@@ -175,8 +175,13 @@ export function buildApp(): WhatsAppController {
   const serviceClient = buildServiceClient();
   const authenticator = buildAuthenticator(serviceClient, logger);
   const propertyRepository = new SupabasePropertyRepository(serviceClient);
-  const propertyService = new PropertyService(propertyRepository, new IbgeMunicipalityDirectory(logger), logger);
   const propertyPhotoRepository = new SupabasePropertyPhotoRepository(serviceClient);
+  const propertyService = new PropertyService(
+    propertyRepository,
+    new IbgeMunicipalityDirectory(logger),
+    logger,
+    propertyPhotoRepository,
+  );
   const photoStorage = new SupabasePhotoStorage(serviceClient);
   const propertyPhotoService = new PropertyPhotoService(propertyRepository, propertyPhotoRepository, photoStorage, logger);
   const propertyListService = new PropertyListService(propertyRepository, propertyPhotoRepository, photoStorage);
