@@ -5,6 +5,7 @@ import {
   type CompanyBroker,
   type NewPropertyEvent,
   type NewPropertyRecord,
+  type PropertyListQuery,
   type PropertyPatch,
   type PropertyRepository,
 } from '../domain/property-repository.js';
@@ -164,6 +165,29 @@ export class SupabasePropertyRepository implements PropertyRepository {
     return data ? { id: data.id, fullName: data.full_name, isActive: data.is_active !== false } : null;
   }
 
+  async list(companyId: string, query: PropertyListQuery): Promise<{ items: Property[]; total: number }> {
+    let request = this.client
+      .from('properties')
+      .select('*', { count: 'exact' })
+      .eq('company_id', companyId);
+
+    request = query.statuses.length > 0 ? request.in('status', query.statuses) : request.neq('status', 'inativo');
+
+    if (query.types.length > 0) request = request.in('type', query.types);
+    if (query.responsibleBrokerId) request = request.eq('responsible_broker_id', query.responsibleBrokerId);
+    if (query.search) request = request.ilike('search_text', `%${escapeLike(query.search)}%`);
+
+    const from = (query.page - 1) * query.pageSize;
+    const { data, error, count } = await request
+      .order('updated_at', { ascending: false })
+      .order('id', { ascending: true })
+      .range(from, from + query.pageSize - 1);
+
+    if (error) throw new Error(`Falha ao listar imóveis: ${error.message}`);
+
+    return { items: (data as PropertyRow[]).map(toProperty), total: count ?? 0 };
+  }
+
   async listBrokers(companyId: string): Promise<CompanyBroker[]> {
     const { data, error } = await this.client
       .from('profiles')
@@ -179,6 +203,11 @@ export class SupabasePropertyRepository implements PropertyRepository {
       isActive: row.is_active !== false,
     }));
   }
+}
+
+/** `%`, `_` e `\` digitados na busca valem como texto, não como curinga do LIKE. */
+export function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
 function toColumns(record: Partial<Omit<NewPropertyRecord, 'companyId' | 'createdBy'>>): Record<string, unknown> {

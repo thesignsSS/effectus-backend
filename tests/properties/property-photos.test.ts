@@ -7,16 +7,11 @@ import {
   PropertyService,
   PropertyValidationError,
 } from '../../src/app/modules/properties/application/property.service.js';
-import { MAX_PHOTOS_PER_PROPERTY, type PropertyPhoto } from '../../src/app/modules/properties/domain/property-photo.js';
-import type {
-  NewPropertyPhoto,
-  PhotoStorage,
-  PhotoUrls,
-  PropertyPhotoRepository,
-  SignedUpload,
-} from '../../src/app/modules/properties/domain/property-photo-ports.js';
+import { MAX_PHOTOS_PER_PROPERTY } from '../../src/app/modules/properties/domain/property-photo.js';
 import { context, memoryLogger } from '../auth/helpers.js';
 import {
+  FakeStorage,
+  InMemoryPhotoRepository,
   BROKER_A,
   BROKER_B,
   BROKER_C,
@@ -29,68 +24,6 @@ import {
 
 const JPEG = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 const PDF = Uint8Array.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0, 0, 0, 0, 0, 0, 0, 0]);
-
-class InMemoryPhotoRepository implements PropertyPhotoRepository {
-  photos: PropertyPhoto[] = [];
-
-  async list(companyId: string, propertyId: string) {
-    return this.photos
-      .filter((p) => p.companyId === companyId && p.propertyId === propertyId)
-      .sort((a, b) => a.position - b.position);
-  }
-
-  async find(companyId: string, propertyId: string, photoId: string) {
-    return this.photos.find((p) => p.companyId === companyId && p.propertyId === propertyId && p.id === photoId) ?? null;
-  }
-
-  async add(photo: NewPropertyPhoto) {
-    const existing = await this.list(photo.companyId, photo.propertyId);
-    const created: PropertyPhoto = {
-      ...photo,
-      id: randomUUID(),
-      isCover: !existing.some((p) => p.isCover),
-      position: existing.length + 1,
-      createdAt: new Date().toISOString(),
-    };
-    this.photos.push(created);
-    return created;
-  }
-
-  async setCover(companyId: string, propertyId: string, photoId: string) {
-    for (const photo of await this.list(companyId, propertyId)) photo.isCover = photo.id === photoId;
-  }
-
-  async remove(companyId: string, propertyId: string, photoId: string) {
-    const photo = await this.find(companyId, propertyId, photoId);
-    this.photos = this.photos.filter((p) => p.id !== photoId);
-    if (photo?.isCover) {
-      const [next] = await this.list(companyId, propertyId);
-      if (next) next.isCover = true;
-    }
-  }
-}
-
-class FakeStorage implements PhotoStorage {
-  files = new Map<string, { head: Uint8Array; sizeBytes: number }>();
-  removed: string[] = [];
-
-  async createUpload(path: string): Promise<SignedUpload> {
-    return { path, token: 't', signedUrl: `https://storage/${path}?token=t` };
-  }
-
-  async readHead(path: string) {
-    return this.files.get(path) ?? null;
-  }
-
-  async signedUrls(paths: string[]) {
-    return new Map<string, PhotoUrls>(paths.map((p) => [p, { url: `https://signed/${p}`, thumbnailUrl: `https://thumb/${p}` }]));
-  }
-
-  async remove(path: string) {
-    this.removed.push(path);
-    this.files.delete(path);
-  }
-}
 
 const brokerA = context({ userId: BROKER_A, companyId: COMPANY_A });
 const brokerC = context({ userId: BROKER_C, companyId: COMPANY_A });

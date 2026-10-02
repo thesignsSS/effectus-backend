@@ -11,7 +11,11 @@ export interface PropertyPhotoRepository {
   setCover(companyId: string, propertyId: string, photoId: string): Promise<void>;
   /** Remove e, se era a capa, passa a capa para a próxima na ordem (11.3). */
   remove(companyId: string, propertyId: string, photoId: string): Promise<void>;
+  /** Quantidade de fotos e caminho da capa de cada imóvel, para lista e indicador. */
+  summaries(companyId: string, propertyIds: string[]): Promise<Map<string, PhotoSummary>>;
 }
+
+export type PhotoSummary = { count: number; coverPath: string | null };
 
 export type SignedUpload = { path: string; token: string; signedUrl: string };
 

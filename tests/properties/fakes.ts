@@ -14,6 +14,17 @@ import {
   type MunicipalityDirectory,
 } from '../../src/app/modules/properties/domain/municipality-directory.js';
 import type { PropertyInput } from '../../src/app/modules/properties/domain/property.js';
+import { normalizeName } from '../../src/app/modules/properties/domain/municipality-directory.js';
+import type { PropertyPhoto } from '../../src/app/modules/properties/domain/property-photo.js';
+import type {
+  NewPropertyPhoto,
+  PhotoStorage,
+  PhotoSummary,
+  PhotoUrls,
+  PropertyPhotoRepository,
+  SignedUpload,
+} from '../../src/app/modules/properties/domain/property-photo-ports.js';
+import type { PropertyListQuery } from '../../src/app/modules/properties/domain/property-repository.js';
 
 export const COMPANY_A = 'company-a';
 export const COMPANY_B = 'company-b';
@@ -128,6 +139,22 @@ export class InMemoryPropertyRepository implements PropertyRepository {
   async listBrokers(companyId: string): Promise<CompanyBroker[]> {
     return this.brokers.filter((b) => b.companyId === companyId);
   }
+
+  /** Imita o banco: search_text sem acento e em minúsculas; inativos só quando pedidos. */
+  async list(companyId: string, query: PropertyListQuery) {
+    const searchText = (p: Property) =>
+      normalizeName([p.address.street, p.address.number, p.address.neighborhood, p.address.municipality, p.referenceCode, p.registrationNumber, p.developmentName].filter(Boolean).join(' '));
+    const filtered = this.properties
+      .filter((p) => p.companyId === companyId)
+      .filter((p) => (query.statuses.length ? query.statuses.includes(p.status) : p.status !== 'inativo'))
+      .filter((p) => !query.types.length || query.types.includes(p.type))
+      .filter((p) => !query.responsibleBrokerId || p.responsibleBrokerId === query.responsibleBrokerId)
+      .filter((p) => !query.search || searchText(p).includes(query.search))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const from = (query.page - 1) * query.pageSize;
+
+    return { items: filtered.slice(from, from + query.pageSize).map((p) => ({ ...p })), total: filtered.length };
+  }
 }
 
 const MUNICIPALITIES: Record<string, Municipality[]> = {
@@ -165,4 +192,75 @@ export function validInput(overrides: Partial<PropertyInput> = {}): PropertyInpu
     },
     ...overrides,
   };
+}
+
+export class InMemoryPhotoRepository implements PropertyPhotoRepository {
+  photos: PropertyPhoto[] = [];
+
+  async list(companyId: string, propertyId: string) {
+    return this.photos
+      .filter((p) => p.companyId === companyId && p.propertyId === propertyId)
+      .sort((a, b) => a.position - b.position);
+  }
+
+  async find(companyId: string, propertyId: string, photoId: string) {
+    return this.photos.find((p) => p.companyId === companyId && p.propertyId === propertyId && p.id === photoId) ?? null;
+  }
+
+  async add(photo: NewPropertyPhoto) {
+    const existing = await this.list(photo.companyId, photo.propertyId);
+    const created: PropertyPhoto = {
+      ...photo,
+      id: randomUUID(),
+      isCover: !existing.some((p) => p.isCover),
+      position: existing.length + 1,
+      createdAt: new Date().toISOString(),
+    };
+    this.photos.push(created);
+    return created;
+  }
+
+  async setCover(companyId: string, propertyId: string, photoId: string) {
+    for (const photo of await this.list(companyId, propertyId)) photo.isCover = photo.id === photoId;
+  }
+
+  async summaries(companyId: string, propertyIds: string[]) {
+    const result = new Map<string, PhotoSummary>();
+    for (const id of propertyIds) {
+      const list = await this.list(companyId, id);
+      if (list.length) result.set(id, { count: list.length, coverPath: list.find((p) => p.isCover)?.storagePath ?? null });
+    }
+    return result;
+  }
+
+  async remove(companyId: string, propertyId: string, photoId: string) {
+    const photo = await this.find(companyId, propertyId, photoId);
+    this.photos = this.photos.filter((p) => p.id !== photoId);
+    if (photo?.isCover) {
+      const [next] = await this.list(companyId, propertyId);
+      if (next) next.isCover = true;
+    }
+  }
+}
+
+export class FakeStorage implements PhotoStorage {
+  files = new Map<string, { head: Uint8Array; sizeBytes: number }>();
+  removed: string[] = [];
+
+  async createUpload(path: string): Promise<SignedUpload> {
+    return { path, token: 't', signedUrl: `https://storage/${path}?token=t` };
+  }
+
+  async readHead(path: string) {
+    return this.files.get(path) ?? null;
+  }
+
+  async signedUrls(paths: string[]) {
+    return new Map<string, PhotoUrls>(paths.map((p) => [p, { url: `https://signed/${p}`, thumbnailUrl: `https://thumb/${p}` }]));
+  }
+
+  async remove(path: string) {
+    this.removed.push(path);
+    this.files.delete(path);
+  }
 }

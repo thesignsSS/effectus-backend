@@ -60,6 +60,7 @@ import { PropertiesRouter } from './app/modules/properties/http/properties.route
 import { IbgeMunicipalityDirectory } from './app/modules/properties/infra/ibge-municipality.directory.js';
 import { SupabasePropertyRepository } from './app/modules/properties/infra/supabase-property.repository.js';
 import { PropertyPhotoService } from './app/modules/properties/application/property-photo.service.js';
+import { PropertyListService } from './app/modules/properties/application/property-list.service.js';
 import {
   SupabasePhotoStorage,
   SupabasePropertyPhotoRepository,
@@ -175,12 +176,10 @@ export function buildApp(): WhatsAppController {
   const authenticator = buildAuthenticator(serviceClient, logger);
   const propertyRepository = new SupabasePropertyRepository(serviceClient);
   const propertyService = new PropertyService(propertyRepository, new IbgeMunicipalityDirectory(logger), logger);
-  const propertyPhotoService = new PropertyPhotoService(
-    propertyRepository,
-    new SupabasePropertyPhotoRepository(serviceClient),
-    new SupabasePhotoStorage(serviceClient),
-    logger,
-  );
+  const propertyPhotoRepository = new SupabasePropertyPhotoRepository(serviceClient);
+  const photoStorage = new SupabasePhotoStorage(serviceClient);
+  const propertyPhotoService = new PropertyPhotoService(propertyRepository, propertyPhotoRepository, photoStorage, logger);
+  const propertyListService = new PropertyListService(propertyRepository, propertyPhotoRepository, photoStorage);
   const chatRealtimeGateway = new ChatRealtimeGateway(authenticator, logger);
   const processFormSubmission = new ProcessFormSubmissionUseCase(
     oneDriveService,
@@ -230,7 +229,7 @@ export function buildApp(): WhatsAppController {
     proposalEmailReplySyncService,
     new LeadAdsHttpHandler(buildLeadAdsService(logger), logger),
     logger,
-    [new PropertiesRouter(propertyService, propertyPhotoService, logger)],
+    [new PropertiesRouter(propertyService, propertyPhotoService, propertyListService, logger)],
   ).start();
   const remittanceSessionService = new RemittanceSessionService();
   const customerRegistrationExtractor = new OpenRouterCustomerRegistrationClient(

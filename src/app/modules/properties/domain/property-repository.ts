@@ -27,6 +27,16 @@ export type CompanyBroker = {
   isActive: boolean;
 };
 
+export type PropertyListQuery = {
+  /** Já normalizado (minúsculas, sem acento) por quem chama. */
+  search: string | null;
+  statuses: PropertyStatus[];
+  types: string[];
+  responsibleBrokerId: string | null;
+  page: number;
+  pageSize: number;
+};
+
 export class DuplicateReferenceCode extends Error {
   constructor() {
     super('Já existe um imóvel com este código nesta imobiliária. Use outro código ou deixe em branco para gerar um');
@@ -47,4 +57,6 @@ export interface PropertyRepository {
   listEvents(companyId: string, propertyId: string): Promise<PropertyEvent[]>;
   findBroker(companyId: string, brokerId: string): Promise<CompanyBroker | null>;
   listBrokers(companyId: string): Promise<CompanyBroker[]>;
+  /** Mais recente primeiro (9.7, [PROVISÓRIO]). Inativos só quando pedidos no filtro (9.4). */
+  list(companyId: string, query: PropertyListQuery): Promise<{ items: Property[]; total: number }>;
 }

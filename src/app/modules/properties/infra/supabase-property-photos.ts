@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { PhotoMimeType, PropertyPhoto } from '../domain/property-photo.js';
 import type {
   NewPropertyPhoto,
+  PhotoSummary,
   PhotoStorage,
   PhotoUrls,
   PropertyPhotoRepository,
@@ -126,6 +127,29 @@ export class SupabasePropertyPhotoRepository implements PropertyPhotoRepository 
 
       if (next) await this.setCover(companyId, propertyId, next.id);
     }
+  }
+
+  async summaries(companyId: string, propertyIds: string[]): Promise<Map<string, PhotoSummary>> {
+    const result = new Map<string, PhotoSummary>();
+
+    if (propertyIds.length === 0) return result;
+
+    const { data, error } = await this.client
+      .from('property_photos')
+      .select('property_id, storage_path, is_cover')
+      .eq('company_id', companyId)
+      .in('property_id', propertyIds);
+
+    if (error) throw new Error(`Falha ao resumir fotos: ${error.message}`);
+
+    for (const row of data ?? []) {
+      const current = result.get(row.property_id as string) ?? { count: 0, coverPath: null };
+      current.count += 1;
+      if (row.is_cover) current.coverPath = row.storage_path as string;
+      result.set(row.property_id as string, current);
+    }
+
+    return result;
   }
 }
 

@@ -9,6 +9,7 @@ import {
   type PropertyService,
 } from '../application/property.service.js';
 import { PhotoNotFound, type PropertyPhotoService } from '../application/property-photo.service.js';
+import type { PropertyListService } from '../application/property-list.service.js';
 import type { PropertyInput } from '../domain/property.js';
 
 const PHOTO_ROUTE = /^\/api\/properties\/([^/]+)\/photos(?:\/(uploads|[^/]+))?(?:\/(cover))?$/;
@@ -21,6 +22,7 @@ export class PropertiesRouter implements ModuleRouter {
   constructor(
     private readonly service: PropertyService,
     private readonly photoService: PropertyPhotoService,
+    private readonly listService: PropertyListService,
     private readonly logger: Logger,
   ) {}
 
@@ -42,6 +44,24 @@ export class PropertiesRouter implements ModuleRouter {
         if (!/^[A-Z]{2}$/.test(state)) throw new HttpError(400, 'Escolha a UF');
 
         sendJson(response, 200, { ok: true, items: await this.service.listMunicipalities(context, state) });
+        return true;
+      }
+
+      if (method === 'GET' && pathname === '/api/properties') {
+        const params = url.searchParams;
+        const list = (key: string) => params.getAll(key).flatMap((v) => v.split(',')).map((v) => v.trim()).filter(Boolean);
+
+        sendJson(response, 200, {
+          ok: true,
+          ...(await this.listService.list(context, {
+            search: params.get('q'),
+            statuses: list('status'),
+            types: list('type'),
+            responsibleBrokerId: params.get('responsibleBrokerId'),
+            page: Number(params.get('page') ?? 1),
+            pageSize: Number(params.get('pageSize') ?? 50),
+          })),
+        });
         return true;
       }
 
