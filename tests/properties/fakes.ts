@@ -24,7 +24,11 @@ import type {
   PropertyPhotoRepository,
   SignedUpload,
 } from '../../src/app/modules/properties/domain/property-photo-ports.js';
-import type { PropertyListQuery } from '../../src/app/modules/properties/domain/property-repository.js';
+import type {
+  DeleteResult,
+  PropertyListQuery,
+  PropertyUsage,
+} from '../../src/app/modules/properties/domain/property-repository.js';
 import { EMPTY_AD } from '../../src/app/modules/properties/domain/property-ad.js';
 
 export const COMPANY_A = 'company-a';
@@ -141,6 +145,26 @@ export class InMemoryPropertyRepository implements PropertyRepository {
 
   async listBrokers(companyId: string): Promise<CompanyBroker[]> {
     return this.brokers.filter((b) => b.companyId === companyId);
+  }
+
+  /** Uso em propostas e engenharias, definido pelo teste. */
+  readonly usageById = new Map<string, PropertyUsage>();
+
+  async usage(_companyId: string, id: string): Promise<PropertyUsage> {
+    return this.usageById.get(id) ?? { proposals: 0, activeProposals: 0, engineeringRequests: 0 };
+  }
+
+  async deleteIfUnused(companyId: string, id: string): Promise<DeleteResult> {
+    const index = this.properties.findIndex((p) => p.companyId === companyId && p.id === id);
+    if (index < 0) return 'not_found';
+    const usage = await this.usage(companyId, id);
+    if (usage.proposals > 0 || usage.engineeringRequests > 0) return 'has_history';
+    this.properties.splice(index, 1);
+    return 'deleted';
+  }
+
+  async listIdsByResponsible(companyId: string, brokerId: string): Promise<string[]> {
+    return this.properties.filter((p) => p.companyId === companyId && p.responsibleBrokerId === brokerId).map((p) => p.id);
   }
 
   /** Imita o banco: search_text sem acento e em minúsculas; inativos só quando pedidos. */

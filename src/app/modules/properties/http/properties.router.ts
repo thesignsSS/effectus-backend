@@ -10,6 +10,7 @@ import {
 } from '../application/property.service.js';
 import { PhotoNotFound, type PropertyPhotoService } from '../application/property-photo.service.js';
 import type { PropertyListService } from '../application/property-list.service.js';
+import { PropertyHasHistory, type PropertyLifecycleService } from '../application/property-lifecycle.service.js';
 import type { PropertyInput } from '../domain/property.js';
 
 const PHOTO_ROUTE = /^\/api\/properties\/([^/]+)\/photos(?:\/(uploads|[^/]+))?(?:\/(cover))?$/;
@@ -23,6 +24,7 @@ export class PropertiesRouter implements ModuleRouter {
     private readonly service: PropertyService,
     private readonly photoService: PropertyPhotoService,
     private readonly listService: PropertyListService,
+    private readonly lifecycleService: PropertyLifecycleService,
     private readonly logger: Logger,
   ) {}
 
@@ -65,6 +67,18 @@ export class PropertiesRouter implements ModuleRouter {
         return true;
       }
 
+      if (method === 'POST' && pathname === '/api/properties/transfer') {
+        const body = await readJson(request);
+        sendJson(response, 200, { ok: true, ...(await this.lifecycleService.transfer(context, body)) });
+        return true;
+      }
+
+      const lifecycleId = matchId(pathname, '/api/properties/', '/lifecycle');
+      if (method === 'GET' && lifecycleId) {
+        sendJson(response, 200, { ok: true, options: await this.lifecycleService.options(context, lifecycleId) });
+        return true;
+      }
+
       if (method === 'POST' && pathname === '/api/properties') {
         const body = (await readJson(request)) as PropertyInput;
         sendJson(response, 201, { ok: true, property: await this.service.create(context, body) });
@@ -99,6 +113,12 @@ export class PropertiesRouter implements ModuleRouter {
       const id = matchId(pathname, '/api/properties/');
       if (id && method === 'GET') {
         sendJson(response, 200, { ok: true, property: await this.service.get(context, id) });
+        return true;
+      }
+
+      if (id && method === 'DELETE') {
+        await this.lifecycleService.delete(context, id);
+        sendJson(response, 200, { ok: true });
         return true;
       }
 
@@ -164,6 +184,7 @@ function decode(value: string) {
 
 function translate(error: unknown): unknown {
   if (error instanceof PhotoNotFound) return new HttpError(404, error.message);
+  if (error instanceof PropertyHasHistory) return new HttpError(409, error.message);
   if (error instanceof PropertyNotFound) return new HttpError(404, error.message);
   if (error instanceof PropertyValidationError) return new HttpError(422, error.message, error.fields);
   if (error instanceof MunicipalitiesUnavailable) return new HttpError(503, error.message);

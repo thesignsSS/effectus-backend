@@ -14,7 +14,8 @@ export type NewPropertyRecord = Omit<ValidPropertyData, 'referenceCode' | 'respo
 export type PropertyPatch = Partial<Omit<NewPropertyRecord, 'companyId' | 'createdBy'>> & {
   status?: PropertyStatus;
   ad?: Partial<PropertyAdData>;
-  updatedBy: string;
+  /** Nulo em mudança automática ("Sistema"). */
+  updatedBy: string | null;
 };
 
 export type NewPropertyEvent = {
@@ -41,6 +42,15 @@ export type PropertyListQuery = {
   pageSize: number;
 };
 
+/** Uso do imóvel em propostas e engenharias (15.1 e 15.4). */
+export type PropertyUsage = {
+  proposals: number;
+  activeProposals: number;
+  engineeringRequests: number;
+};
+
+export type DeleteResult = 'deleted' | 'has_history' | 'not_found';
+
 export class DuplicateReferenceCode extends Error {
   constructor() {
     super('Já existe um imóvel com este código nesta imobiliária. Use outro código ou deixe em branco para gerar um');
@@ -63,4 +73,8 @@ export interface PropertyRepository {
   listBrokers(companyId: string): Promise<CompanyBroker[]>;
   /** Mais recente primeiro (9.7, [PROVISÓRIO]). Inativos só quando pedidos no filtro (9.4). */
   list(companyId: string, query: PropertyListQuery): Promise<{ items: Property[]; total: number }>;
+  usage(companyId: string, id: string): Promise<PropertyUsage>;
+  /** Apaga só se não houver proposta nem engenharia, checando na mesma operação (15.1). */
+  deleteIfUnused(companyId: string, id: string): Promise<DeleteResult>;
+  listIdsByResponsible(companyId: string, brokerId: string): Promise<string[]>;
 }

@@ -16,6 +16,12 @@ import {
 export interface SupabaseTeamStoreConfig {
   url?: string;
   serviceRoleKey?: string;
+  /**
+   * Roda antes de excluir o usuário, para quem guarda referência a ele
+   * liberá-la (ex.: imóveis passam ao dono do plano, BKL-093 decisão 10).
+   * Se falhar, o usuário não é excluído.
+   */
+  beforeRemoveMember?: (input: { companyId: string; userId: string; ownerId: string }) => Promise<void>;
 }
 
 type CompanyContext = {
@@ -27,8 +33,11 @@ type CompanyContext = {
 
 export class SupabaseTeamStore implements TeamStore {
   private readonly client: SupabaseClient;
+  private readonly beforeRemoveMember?: SupabaseTeamStoreConfig['beforeRemoveMember'];
 
   constructor(config: SupabaseTeamStoreConfig) {
+    this.beforeRemoveMember = config.beforeRemoveMember;
+
     if (!config.url || !config.serviceRoleKey) {
       throw new Error(
         'SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required to manage team members',
@@ -173,6 +182,12 @@ export class SupabaseTeamStore implements TeamStore {
     if (input.targetUserId === context.ownerId) {
       throw new Error('Sem permissão para excluir o dono da empresa.');
     }
+
+    await this.beforeRemoveMember?.({
+      companyId: context.companyId,
+      userId: input.targetUserId,
+      ownerId: context.ownerId,
+    });
 
     const { error } = await this.client.auth.admin.deleteUser(
       input.targetUserId,

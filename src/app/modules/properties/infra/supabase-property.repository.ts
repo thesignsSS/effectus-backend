@@ -1,12 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Property, PropertyEvent, PropertyEventKind, PropertyStatus, PropertyType } from '../domain/property.js';
 import type { PropertyAdData, TriState, Typology } from '../domain/property-ad.js';
+import { isActiveProposalPhase } from '../domain/proposal-phases.js';
 import {
   DuplicateReferenceCode,
   type CompanyBroker,
   type NewPropertyEvent,
   type NewPropertyRecord,
+  type DeleteResult,
   type PropertyListQuery,
+  type PropertyUsage,
   type PropertyPatch,
   type PropertyRepository,
 } from '../domain/property-repository.js';
@@ -203,6 +206,53 @@ export class SupabasePropertyRepository implements PropertyRepository {
     if (error) throw new Error(`Falha ao listar imóveis: ${error.message}`);
 
     return { items: (data as PropertyRow[]).map(toProperty), total: count ?? 0 };
+  }
+
+  async usage(companyId: string, id: string): Promise<PropertyUsage> {
+    const [proposals, engineering] = await Promise.all([
+      this.client.from('proposals').select('status').eq('company_id', companyId).eq('property_id', id),
+      this.client
+        .from('engineering_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .eq('property_id', id),
+    ]);
+
+    if (proposals.error) throw new Error(`Falha ao verificar propostas do imóvel: ${proposals.error.message}`);
+    if (engineering.error) throw new Error(`Falha ao verificar engenharias do imóvel: ${engineering.error.message}`);
+
+    const statuses = (proposals.data ?? []).map((row) => String(row.status));
+
+    return {
+      proposals: statuses.length,
+      activeProposals: statuses.filter(isActiveProposalPhase).length,
+      engineeringRequests: engineering.count ?? 0,
+    };
+  }
+
+  async deleteIfUnused(companyId: string, id: string): Promise<DeleteResult> {
+    if (!isUuid(id)) return 'not_found';
+
+    const { data, error } = await this.client.rpc('delete_property_if_unused', {
+      p_company_id: companyId,
+      p_property_id: id,
+    });
+
+    if (error) throw new Error(`Falha ao excluir imóvel: ${error.message}`);
+
+    return data as DeleteResult;
+  }
+
+  async listIdsByResponsible(companyId: string, brokerId: string): Promise<string[]> {
+    const { data, error } = await this.client
+      .from('properties')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('responsible_broker_id', brokerId);
+
+    if (error) throw new Error(`Falha ao listar imóveis do corretor: ${error.message}`);
+
+    return (data ?? []).map((row) => row.id as string);
   }
 
   async listBrokers(companyId: string): Promise<CompanyBroker[]> {

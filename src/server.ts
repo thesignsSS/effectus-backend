@@ -61,6 +61,7 @@ import { IbgeMunicipalityDirectory } from './app/modules/properties/infra/ibge-m
 import { SupabasePropertyRepository } from './app/modules/properties/infra/supabase-property.repository.js';
 import { PropertyPhotoService } from './app/modules/properties/application/property-photo.service.js';
 import { PropertyListService } from './app/modules/properties/application/property-list.service.js';
+import { PropertyLifecycleService } from './app/modules/properties/application/property-lifecycle.service.js';
 import {
   SupabasePhotoStorage,
   SupabasePropertyPhotoRepository,
@@ -142,6 +143,10 @@ export function buildApp(): WhatsAppController {
   const teamStore = new SupabaseTeamStore({
     url: env.supabaseUrl,
     serviceRoleKey: env.supabaseServiceRoleKey,
+    // Decisão 10 (BKL-093): imóveis de quem sai passam ao dono do plano antes da exclusão.
+    beforeRemoveMember: async ({ companyId, userId, ownerId }) => {
+      await propertyLifecycleService.reassignFromDepartingBroker(companyId, userId, ownerId);
+    },
   });
   const proposalStore = new SupabaseProposalStore({
     url: env.supabaseUrl,
@@ -185,6 +190,12 @@ export function buildApp(): WhatsAppController {
   const photoStorage = new SupabasePhotoStorage(serviceClient);
   const propertyPhotoService = new PropertyPhotoService(propertyRepository, propertyPhotoRepository, photoStorage, logger);
   const propertyListService = new PropertyListService(propertyRepository, propertyPhotoRepository, photoStorage);
+  const propertyLifecycleService = new PropertyLifecycleService(
+    propertyRepository,
+    propertyPhotoRepository,
+    photoStorage,
+    logger,
+  );
   const chatRealtimeGateway = new ChatRealtimeGateway(authenticator, logger);
   const processFormSubmission = new ProcessFormSubmissionUseCase(
     oneDriveService,
@@ -234,7 +245,7 @@ export function buildApp(): WhatsAppController {
     proposalEmailReplySyncService,
     new LeadAdsHttpHandler(buildLeadAdsService(logger), logger),
     logger,
-    [new PropertiesRouter(propertyService, propertyPhotoService, propertyListService, logger)],
+    [new PropertiesRouter(propertyService, propertyPhotoService, propertyListService, propertyLifecycleService, logger)],
   ).start();
   const remittanceSessionService = new RemittanceSessionService();
   const customerRegistrationExtractor = new OpenRouterCustomerRegistrationClient(
