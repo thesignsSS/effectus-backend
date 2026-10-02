@@ -59,6 +59,11 @@ import { PropertyService } from './app/modules/properties/application/property.s
 import { PropertiesRouter } from './app/modules/properties/http/properties.router.js';
 import { IbgeMunicipalityDirectory } from './app/modules/properties/infra/ibge-municipality.directory.js';
 import { SupabasePropertyRepository } from './app/modules/properties/infra/supabase-property.repository.js';
+import { PropertyPhotoService } from './app/modules/properties/application/property-photo.service.js';
+import {
+  SupabasePhotoStorage,
+  SupabasePropertyPhotoRepository,
+} from './app/modules/properties/infra/supabase-property-photos.js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 export function buildApp(): WhatsAppController {
@@ -168,9 +173,12 @@ export function buildApp(): WhatsAppController {
   proposalEmailReplySyncService.start();
   const serviceClient = buildServiceClient();
   const authenticator = buildAuthenticator(serviceClient, logger);
-  const propertyService = new PropertyService(
-    new SupabasePropertyRepository(serviceClient),
-    new IbgeMunicipalityDirectory(logger),
+  const propertyRepository = new SupabasePropertyRepository(serviceClient);
+  const propertyService = new PropertyService(propertyRepository, new IbgeMunicipalityDirectory(logger), logger);
+  const propertyPhotoService = new PropertyPhotoService(
+    propertyRepository,
+    new SupabasePropertyPhotoRepository(serviceClient),
+    new SupabasePhotoStorage(serviceClient),
     logger,
   );
   const chatRealtimeGateway = new ChatRealtimeGateway(authenticator, logger);
@@ -222,7 +230,7 @@ export function buildApp(): WhatsAppController {
     proposalEmailReplySyncService,
     new LeadAdsHttpHandler(buildLeadAdsService(logger), logger),
     logger,
-    [new PropertiesRouter(propertyService, logger)],
+    [new PropertiesRouter(propertyService, propertyPhotoService, logger)],
   ).start();
   const remittanceSessionService = new RemittanceSessionService();
   const customerRegistrationExtractor = new OpenRouterCustomerRegistrationClient(

@@ -8,7 +8,10 @@ import {
   PropertyValidationError,
   type PropertyService,
 } from '../application/property.service.js';
+import { PhotoNotFound, type PropertyPhotoService } from '../application/property-photo.service.js';
 import type { PropertyInput } from '../domain/property.js';
+
+const PHOTO_ROUTE = /^\/api\/properties\/([^/]+)\/photos(?:\/(uploads|[^/]+))?(?:\/(cover))?$/;
 
 /**
  * Rotas do imóvel (spec BKL-093). A empresa e o papel vêm sempre do token;
@@ -17,6 +20,7 @@ import type { PropertyInput } from '../domain/property.js';
 export class PropertiesRouter implements ModuleRouter {
   constructor(
     private readonly service: PropertyService,
+    private readonly photoService: PropertyPhotoService,
     private readonly logger: Logger,
   ) {}
 
@@ -47,6 +51,11 @@ export class PropertiesRouter implements ModuleRouter {
         return true;
       }
 
+      const photoRoute = pathname.match(PHOTO_ROUTE);
+      if (photoRoute) {
+        return await this.handlePhotos(request, response, method, photoRoute, context);
+      }
+
       const historyId = matchId(pathname, '/api/properties/', '/history');
       if (method === 'GET' && historyId) {
         sendJson(response, 200, { ok: true, items: await this.service.history(context, historyId) });
@@ -71,9 +80,56 @@ export class PropertiesRouter implements ModuleRouter {
       return true;
     }
   }
+
+  /** Seção 11: listar, preparar envio, confirmar envio, trocar capa e remover. */
+  private async handlePhotos(
+    request: IncomingMessage,
+    response: ServerResponse,
+    method: string,
+    [, rawPropertyId, segment, action]: RegExpMatchArray,
+    context: AuthContext,
+  ): Promise<boolean> {
+    const propertyId = decode(rawPropertyId);
+
+    if (method === 'GET' && !segment) {
+      sendJson(response, 200, { ok: true, ...(await this.photoService.list(context, propertyId)) });
+      return true;
+    }
+
+    if (method === 'POST' && segment === 'uploads' && !action) {
+      const body = await readJson(request);
+      sendJson(response, 201, { ok: true, upload: await this.photoService.prepareUpload(context, propertyId, body) });
+      return true;
+    }
+
+    if (method === 'POST' && !segment) {
+      const body = await readJson(request);
+      sendJson(response, 201, { ok: true, photo: await this.photoService.confirmUpload(context, propertyId, body) });
+      return true;
+    }
+
+    if (method === 'POST' && segment && action === 'cover') {
+      await this.photoService.setCover(context, propertyId, decode(segment));
+      sendJson(response, 200, { ok: true });
+      return true;
+    }
+
+    if (method === 'DELETE' && segment && segment !== 'uploads' && !action) {
+      await this.photoService.remove(context, propertyId, decode(segment));
+      sendJson(response, 200, { ok: true });
+      return true;
+    }
+
+    return false;
+  }
+}
+
+function decode(value: string) {
+  return decodeURIComponent(value);
 }
 
 function translate(error: unknown): unknown {
+  if (error instanceof PhotoNotFound) return new HttpError(404, error.message);
   if (error instanceof PropertyNotFound) return new HttpError(404, error.message);
   if (error instanceof PropertyValidationError) return new HttpError(422, error.message, error.fields);
   if (error instanceof MunicipalitiesUnavailable) return new HttpError(503, error.message);
