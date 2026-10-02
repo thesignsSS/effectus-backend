@@ -25,6 +25,7 @@ import type {
   SignedUpload,
 } from '../../src/app/modules/properties/domain/property-photo-ports.js';
 import type { PropertyListQuery } from '../../src/app/modules/properties/domain/property-repository.js';
+import { EMPTY_AD } from '../../src/app/modules/properties/domain/property-ad.js';
 
 export const COMPANY_A = 'company-a';
 export const COMPANY_B = 'company-b';
@@ -74,6 +75,7 @@ export class InMemoryPropertyRepository implements PropertyRepository {
       updatedBy: record.createdBy,
       createdAt: now,
       updatedAt: now,
+      ad: { ...EMPTY_AD, latitude: record.latitude ?? null, longitude: record.longitude ?? null },
     };
 
     this.properties.push(property);
@@ -99,6 +101,7 @@ export class InMemoryPropertyRepository implements PropertyRepository {
       responsibleBrokerId: patch.responsibleBrokerId ?? current.responsibleBrokerId,
       internalNotes: patch.internalNotes === undefined ? current.internalNotes : patch.internalNotes,
       status: patch.status ?? current.status,
+      ad: { ...current.ad, ...(patch.ad ?? {}), ...(patch.latitude !== undefined ? { latitude: patch.latitude, longitude: patch.longitude ?? null } : {}) },
       updatedBy: patch.updatedBy,
       updatedAt: new Date().toISOString(),
     };

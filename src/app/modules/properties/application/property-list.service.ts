@@ -94,9 +94,9 @@ export class PropertyListService {
         const summary = summaries.get(property.id) ?? { count: 0, coverPath: null };
         const readiness = computeAdReadiness({
           status: property.status,
-          typology: property.ad?.typology ?? null,
-          title: property.ad?.title ?? null,
-          headline: property.ad?.headline ?? null,
+          typology: property.ad.typology,
+          title: property.ad.title,
+          headline: property.ad.headline,
           municipality: property.address.municipality,
           state: property.address.state,
           photoCount: summary.count,

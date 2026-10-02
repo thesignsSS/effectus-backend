@@ -5,6 +5,8 @@ import { requireActiveCompany } from '../../auth/permissions.js';
 import type { MunicipalityDirectory } from '../domain/municipality-directory.js';
 import { adReadinessLabel, computeAdReadiness, type AdReadiness } from '../domain/ad-readiness.js';
 import type { PropertyPhotoRepository } from '../domain/property-photo-ports.js';
+import { NoGeocoder, type Geocoder } from '../domain/geocoder.js';
+import { validateAdInput, type AdInput } from '../domain/property-ad.js';
 import {
   MANUAL_STATUSES_FOR_RESPONSIBLE,
   PROPERTY_STATUSES,
@@ -76,7 +78,48 @@ export class PropertyService {
     private readonly municipalities: MunicipalityDirectory,
     private readonly logger: Logger,
     private readonly photos?: PropertyPhotoRepository,
+    private readonly geocoder: Geocoder = new NoGeocoder(),
   ) {}
+
+  /**
+   * Dados do anúncio (seção 12). Salvar nunca é bloqueado por falta de
+   * campo; telefone ou e-mail no texto voltam como aviso (12.4).
+   */
+  async saveAd(context: AuthContext, id: string, input: AdInput): Promise<{ property: PropertyView; warnings: string[] }> {
+    const property = await this.load(context, id);
+    propertyPolicy.assert(context, 'edit', property);
+
+    const result = validateAdInput(input);
+
+    if (!result.ok) throw new PropertyValidationError(result.errors);
+
+    const updated = await this.repository.update(property.companyId, property.id, {
+      ad: result.data,
+      updatedBy: context.userId,
+    });
+
+    await this.repository.addEvent({
+      companyId: property.companyId,
+      propertyId: property.id,
+      kind: 'updated',
+      actorId: context.userId,
+      data: { section: 'ad' },
+    });
+
+    return { property: await this.toView(context, updated), warnings: result.warnings };
+  }
+
+  /** 12.6: tenta localizar; qualquer falha deixa o imóvel sem ponto no mapa, sem bloquear. */
+  private async locate(address: ValidPropertyData['address']) {
+    try {
+      return (await this.geocoder.locate({ ...address })) ?? { latitude: null, longitude: null };
+    } catch (error) {
+      this.logger.warn('Imóvel salvo sem localização no mapa', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { latitude: null, longitude: null };
+    }
+  }
 
   /**
    * Mudança manual de situação (10.3 e 10.4). Responsável escolhe entre
@@ -126,6 +169,7 @@ export class PropertyService {
     const responsible = await this.resolveResponsible(companyId, data.responsibleBrokerId ?? context.userId);
     const record = {
       ...data,
+      ...(await this.locate(data.address)),
       companyId,
       createdBy: context.userId,
       responsibleBrokerId: responsible.id,
@@ -192,8 +236,10 @@ export class PropertyService {
       throw new PropertyValidationError({ referenceCode: new DuplicateReferenceCode().message });
     }
 
+    const addressChanged = JSON.stringify(data.address) !== JSON.stringify(property.address);
     const patch: PropertyPatch = {
       ...data,
+      ...(addressChanged ? await this.locate(data.address) : {}),
       referenceCode,
       responsibleBrokerId: wantedResponsible,
       updatedBy: context.userId,
@@ -358,9 +404,9 @@ export class PropertyService {
     const readiness = summary
       ? computeAdReadiness({
           status: property.status,
-          typology: property.ad?.typology ?? null,
-          title: property.ad?.title ?? null,
-          headline: property.ad?.headline ?? null,
+          typology: property.ad.typology,
+          title: property.ad.title,
+          headline: property.ad.headline,
           municipality: property.address.municipality,
           state: property.address.state,
           photoCount: summary.count,

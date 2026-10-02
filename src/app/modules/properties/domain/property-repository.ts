@@ -1,8 +1,11 @@
 import type { Property, PropertyEvent, PropertyEventKind, PropertyStatus } from './property.js';
+import type { PropertyAdData } from './property-ad.js';
 import type { ValidPropertyData } from './property-validation.js';
 
 export type NewPropertyRecord = Omit<ValidPropertyData, 'referenceCode' | 'responsibleBrokerId'> & {
   companyId: string;
+  latitude?: number | null;
+  longitude?: number | null;
   referenceCode: string;
   responsibleBrokerId: string;
   createdBy: string;
@@ -10,6 +13,7 @@ export type NewPropertyRecord = Omit<ValidPropertyData, 'referenceCode' | 'respo
 
 export type PropertyPatch = Partial<Omit<NewPropertyRecord, 'companyId' | 'createdBy'>> & {
   status?: PropertyStatus;
+  ad?: Partial<PropertyAdData>;
   updatedBy: string;
 };
 

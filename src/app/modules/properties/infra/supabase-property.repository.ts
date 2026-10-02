@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Property, PropertyEvent, PropertyEventKind, PropertyStatus, PropertyType } from '../domain/property.js';
+import type { PropertyAdData, TriState, Typology } from '../domain/property-ad.js';
 import {
   DuplicateReferenceCode,
   type CompanyBroker,
@@ -39,6 +40,22 @@ type PropertyRow = {
   updated_by: string | null;
   created_at: string;
   updated_at: string;
+  typology: Typology | null;
+  ad_title: string | null;
+  ad_headline: string | null;
+  ad_description: string | null;
+  ad_highlights: string[] | null;
+  bedrooms: number | null;
+  suites: number | null;
+  bathrooms: number | null;
+  parking_spaces: number | null;
+  accepts_financing: TriState;
+  accepts_fgts: TriState;
+  accepts_mcmv: TriState;
+  show_price: boolean;
+  show_full_address: boolean;
+  latitude: number | string | null;
+  longitude: number | string | null;
 };
 
 const UNIQUE_VIOLATION = '23505';
@@ -80,8 +97,8 @@ export class SupabasePropertyRepository implements PropertyRepository {
   }
 
   async update(companyId: string, id: string, patch: PropertyPatch): Promise<Property> {
-    const { status, updatedBy, ...fields } = patch;
-    const columns: Record<string, unknown> = { ...toColumns(fields), updated_by: updatedBy };
+    const { status, updatedBy, ad, ...fields } = patch;
+    const columns: Record<string, unknown> = { ...toColumns(fields), ...adColumns(ad), updated_by: updatedBy };
 
     if (status) {
       columns.status = status;
@@ -228,6 +245,8 @@ function toColumns(record: Partial<Omit<NewPropertyRecord, 'companyId' | 'create
   set('appraisal_valid_until', record.appraisalValidUntil);
   set('internal_notes', record.internalNotes);
   set('responsible_broker_id', record.responsibleBrokerId);
+  set('latitude', record.latitude);
+  set('longitude', record.longitude);
 
   if (record.address) {
     set('state', record.address.state);
@@ -242,6 +261,37 @@ function toColumns(record: Partial<Omit<NewPropertyRecord, 'companyId' | 'create
 
   return columns;
 }
+
+function adColumns(ad: Partial<PropertyAdData> | undefined): Record<string, unknown> {
+  if (!ad) return {};
+
+  const map: Record<keyof PropertyAdData, string> = {
+    typology: 'typology',
+    title: 'ad_title',
+    headline: 'ad_headline',
+    description: 'ad_description',
+    highlights: 'ad_highlights',
+    bedrooms: 'bedrooms',
+    suites: 'suites',
+    bathrooms: 'bathrooms',
+    parkingSpaces: 'parking_spaces',
+    acceptsFinancing: 'accepts_financing',
+    acceptsFgts: 'accepts_fgts',
+    acceptsMcmv: 'accepts_mcmv',
+    showPrice: 'show_price',
+    showFullAddress: 'show_full_address',
+    latitude: 'latitude',
+    longitude: 'longitude',
+  };
+
+  return Object.fromEntries(
+    Object.entries(ad)
+      .filter(([, value]) => value !== undefined)
+      .map(([key, value]) => [map[key as keyof PropertyAdData], value]),
+  );
+}
+
+const toNumber = (value: number | string | null) => (value === null ? null : Number(value));
 
 function toProperty(row: PropertyRow): Property {
   return {
@@ -276,6 +326,24 @@ function toProperty(row: PropertyRow): Property {
     updatedBy: row.updated_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    ad: {
+      typology: row.typology ?? null,
+      title: row.ad_title ?? null,
+      headline: row.ad_headline ?? null,
+      description: row.ad_description ?? null,
+      highlights: row.ad_highlights ?? [],
+      bedrooms: row.bedrooms ?? null,
+      suites: row.suites ?? null,
+      bathrooms: row.bathrooms ?? null,
+      parkingSpaces: row.parking_spaces ?? null,
+      acceptsFinancing: row.accepts_financing ?? 'nao_informado',
+      acceptsFgts: row.accepts_fgts ?? 'nao_informado',
+      acceptsMcmv: row.accepts_mcmv ?? 'nao_informado',
+      showPrice: row.show_price ?? true,
+      showFullAddress: row.show_full_address ?? false,
+      latitude: toNumber(row.latitude ?? null),
+      longitude: toNumber(row.longitude ?? null),
+    },
   };
 }
 

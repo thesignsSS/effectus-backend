@@ -1,3 +1,5 @@
+import type { PropertyAdData } from './property-ad.js';
+
 /**
  * Imóvel como cadastro único da empresa (spec BKL-093). Os nomes de tipo e
  * situação seguem o padrão de slugs das propostas (`em_analise`).
@@ -65,18 +67,12 @@ export type Property = {
   responsibleBrokerId: string;
   status: PropertyStatus;
   statusChangedAt: string;
-  /** Dados do anúncio (seção 12); ausente até o imóvel ter algum preenchido. */
-  ad?: PropertyAd | null;
+  /** Dados do anúncio (seção 12), todos opcionais. */
+  ad: PropertyAdData;
   createdBy: string;
   updatedBy: string | null;
   createdAt: string;
   updatedAt: string;
-};
-
-export type PropertyAd = {
-  typology: string | null;
-  title: string | null;
-  headline: string | null;
 };
 
 export type PropertyAddress = {
