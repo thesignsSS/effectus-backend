@@ -66,6 +66,10 @@ import {
   SupabasePhotoStorage,
   SupabasePropertyPhotoRepository,
 } from './app/modules/properties/infra/supabase-property-photos.js';
+import { PropertySituationService } from './app/modules/properties/application/property-situation.service.js';
+import { ProposalPropertyService } from './app/modules/properties/application/proposal-property.service.js';
+import { ProposalPropertyRouter } from './app/modules/properties/http/proposal-property.router.js';
+import { SupabaseProposalLinkGateway } from './app/modules/properties/infra/supabase-proposal-link.gateway.js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 export function buildApp(): WhatsAppController {
@@ -196,6 +200,19 @@ export function buildApp(): WhatsAppController {
     photoStorage,
     logger,
   );
+  const proposalLinkGateway = new SupabaseProposalLinkGateway(serviceClient);
+  const proposalPropertyService = new ProposalPropertyService(
+    propertyRepository,
+    proposalLinkGateway,
+    new PropertySituationService(
+      propertyRepository,
+      proposalLinkGateway,
+      { notify: async (alert) => void (await notificationService.notifyUsersAboutProperty(alert)) },
+      logger,
+    ),
+    propertyListService,
+    logger,
+  );
   const chatRealtimeGateway = new ChatRealtimeGateway(authenticator, logger);
   const processFormSubmission = new ProcessFormSubmissionUseCase(
     oneDriveService,
@@ -245,7 +262,11 @@ export function buildApp(): WhatsAppController {
     proposalEmailReplySyncService,
     new LeadAdsHttpHandler(buildLeadAdsService(logger), logger),
     logger,
-    [new PropertiesRouter(propertyService, propertyPhotoService, propertyListService, propertyLifecycleService, logger)],
+    [
+      new PropertiesRouter(propertyService, propertyPhotoService, propertyListService, propertyLifecycleService, logger),
+      new ProposalPropertyRouter(proposalPropertyService, logger),
+    ],
+    proposalPropertyService,
   ).start();
   const remittanceSessionService = new RemittanceSessionService();
   const customerRegistrationExtractor = new OpenRouterCustomerRegistrationClient(

@@ -77,6 +77,11 @@ export class PropertyListService {
       pageSize,
     });
 
+    return { page, pageSize, total, items: await this.toItems(companyId, items) };
+  }
+
+  /** Mesma linha da lista, para quem mostra imóveis fora dela (seletor e bloco da proposta). */
+  async toItems(companyId: string, items: Property[]): Promise<PropertyListItem[]> {
     const ids = items.map((item) => item.id);
     const [summaries, brokers] = await Promise.all([
       this.photos.summaries(companyId, ids),
@@ -86,43 +91,38 @@ export class PropertyListService {
     const urls = await this.storage.signedUrls(coverPaths, THUMBNAIL_SECONDS);
     const brokerNames = new Map(brokers.map((b) => [b.id, b.fullName]));
 
-    return {
-      page,
-      pageSize,
-      total,
-      items: items.map((property) => {
-        const summary = summaries.get(property.id) ?? { count: 0, coverPath: null };
-        const readiness = computeAdReadiness({
-          status: property.status,
-          typology: property.ad.typology,
-          title: property.ad.title,
-          headline: property.ad.headline,
-          municipality: property.address.municipality,
-          state: property.address.state,
-          photoCount: summary.count,
-          hasCover: Boolean(summary.coverPath),
-        });
+    return items.map((property) => {
+      const summary = summaries.get(property.id) ?? { count: 0, coverPath: null };
+      const readiness = computeAdReadiness({
+        status: property.status,
+        typology: property.ad.typology,
+        title: property.ad.title,
+        headline: property.ad.headline,
+        municipality: property.address.municipality,
+        state: property.address.state,
+        photoCount: summary.count,
+        hasCover: Boolean(summary.coverPath),
+      });
 
-        return {
-          id: property.id,
-          referenceCode: property.referenceCode,
-          street: property.address.street,
-          number: property.address.number,
-          neighborhood: property.address.neighborhood,
-          municipality: property.address.municipality,
-          state: property.address.state,
-          type: property.type,
-          typeLabel: PROPERTY_TYPE_LABELS[property.type],
-          salePrice: property.salePrice,
-          status: property.status,
-          statusLabel: PROPERTY_STATUS_LABELS[property.status],
-          responsibleBroker: { id: property.responsibleBrokerId, name: brokerNames.get(property.responsibleBrokerId) ?? null },
-          coverThumbnailUrl: summary.coverPath ? (urls.get(summary.coverPath)?.thumbnailUrl ?? null) : null,
-          adReadiness: readiness,
-          adReadinessLabel: adReadinessLabel(readiness),
-          updatedAt: property.updatedAt,
-        };
-      }),
-    };
+      return {
+        id: property.id,
+        referenceCode: property.referenceCode,
+        street: property.address.street,
+        number: property.address.number,
+        neighborhood: property.address.neighborhood,
+        municipality: property.address.municipality,
+        state: property.address.state,
+        type: property.type,
+        typeLabel: PROPERTY_TYPE_LABELS[property.type],
+        salePrice: property.salePrice,
+        status: property.status,
+        statusLabel: PROPERTY_STATUS_LABELS[property.status],
+        responsibleBroker: { id: property.responsibleBrokerId, name: brokerNames.get(property.responsibleBrokerId) ?? null },
+        coverThumbnailUrl: summary.coverPath ? (urls.get(summary.coverPath)?.thumbnailUrl ?? null) : null,
+        adReadiness: readiness,
+        adReadinessLabel: adReadinessLabel(readiness),
+        updatedAt: property.updatedAt,
+      };
+    });
   }
 }

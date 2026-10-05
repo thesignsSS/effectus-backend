@@ -25,6 +25,9 @@ import {
   EffectusAssistantService,
 } from '../../services/effectus-assistant.service.js';
 import { EMPRESA_SUSPENSA } from '../supabase/company-scope.js';
+import type { ProposalPropertyService } from '../../modules/properties/application/proposal-property.service.js';
+import { PropertyNotFound, PropertyValidationError } from '../../modules/properties/application/property.service.js';
+import { PermissionDenied } from '../../modules/auth/permissions.js';
 import { GmailSmtpEmailService } from '../../services/gmail-smtp-email.service.js';
 import { ProposalEmailReplySyncService } from '../../services/proposal-email-reply-sync.service.js';
 import { WhatsAppService } from '../../services/whatsapp.service.js';
@@ -103,6 +106,8 @@ export class FormSubmissionHttpServer {
     private readonly logger: Logger,
     /** Módulos novos (imóvel, vendedor, anúncios): só com JWT, nunca com a chave antiga. */
     private readonly moduleRouters: ModuleRouter[] = [],
+    /** Imóvel da proposta (BKL-093, seção 13): vínculo na criação e situação nas mudanças. */
+    private readonly proposalProperties?: ProposalPropertyService,
   ) {}
 
   start(): void {
@@ -553,7 +558,38 @@ export class FormSubmissionHttpServer {
     try {
       const payload = await this.readJsonBody(request);
       const input = this.toFormSubmissionInput(payload);
+      const propertyId = readOptionalString(payload, 'propertyId', 'imovelId');
+      const context = this.authenticator.contextOf(request);
+
+      // Imóvel escolhido no formulário (BKL-093, seção 13): conferido antes de
+      // criar a proposta, para não nascer proposta com vínculo recusado.
+      if (propertyId) {
+        if (!context) {
+          this.sendJson(response, 401, { ok: false, error: 'Entre de novo para escolher o imóvel da proposta.' });
+          return;
+        }
+
+        const refusal = await this.proposalProperties
+          ?.assertLinkable(context, propertyId)
+          .then(() => null)
+          .catch((error: unknown) => linkRefusal(error));
+
+        if (refusal) {
+          this.sendJson(response, refusal.status, { ok: false, error: refusal.message });
+          return;
+        }
+      }
+
       const result = await this.processFormSubmission.execute(input);
+
+      if (propertyId && context && result.proposalId) {
+        await this.proposalProperties?.link(context, result.proposalId, propertyId).catch((error: unknown) =>
+          this.logger.error('Proposta criada sem o imóvel escolhido', {
+            proposalId: result.proposalId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
 
       if (result.proposalId && result.proposalCode) {
         await this.notificationService.notifyAdminsAboutSubmittedProposal({
@@ -2178,6 +2214,16 @@ export class FormSubmissionHttpServer {
 
       const effects = result?.effects;
 
+      // Fase mudou: a situação do imóvel acompanha (BKL-093, 13.15).
+      if (effects?.statusChangedTo) {
+        await this.proposalProperties?.onPhaseChanged(proposalId).catch((error: unknown) =>
+          this.logger.error('Falha ao recalcular situação do imóvel da proposta', {
+            proposalId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
+
       this.sendJson(response, 200, {
         ok: true,
         proposalId,
@@ -2802,6 +2848,7 @@ export class FormSubmissionHttpServer {
     const proposalId = getRequiredPathSegment(requestUrl.pathname, 2, 'proposalId');
 
     try {
+      const afterDelete = await this.proposalProperties?.beforeProposalDeleted(proposalId);
       const result = await this.proposalStore.delete({
         brokerUserId,
         proposalId,
@@ -2811,6 +2858,13 @@ export class FormSubmissionHttpServer {
         this.sendJson(response, 404, { ok: false, error: 'Proposta não encontrada' });
         return;
       }
+
+      await afterDelete?.().catch((error: unknown) =>
+        this.logger.error('Falha ao recalcular situação do imóvel da proposta excluída', {
+          proposalId,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
 
       await Promise.all(
         result.documentLocations.map((location) =>
@@ -3708,4 +3762,16 @@ function runZip(filesDir: string, zipPath: string): Promise<void> {
       reject(new Error(`ZIP command failed: ${stderr || code}`));
     });
   });
+}
+
+/** Por que o imóvel escolhido não pode entrar na proposta nova (BKL-093, 13.3 e CA-13.13). */
+function linkRefusal(error: unknown): { status: number; message: string } {
+  if (error instanceof PropertyNotFound) return { status: 404, message: error.message };
+  if (error instanceof PropertyValidationError) {
+    return { status: 422, message: Object.values(error.fields)[0] ?? error.message };
+  }
+  if (error instanceof PermissionDenied) return { status: 403, message: error.message };
+  if (error instanceof Error && error.message.includes(EMPRESA_SUSPENSA)) return { status: 403, message: error.message };
+
+  throw error;
 }

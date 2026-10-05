@@ -152,6 +152,24 @@ export class NotificationService {
     return notifications[0] ?? null;
   }
 
+  /** Avisos do imóvel (BKL-093, 13.7 e 13.9): imóvel vendido por outra proposta, ou inativo ao finalizar. */
+  async notifyUsersAboutProperty(input: {
+    userIds: string[];
+    proposalId: string;
+    title: string;
+    message: string;
+  }): Promise<NotificationItem[]> {
+    return this.store.createMany(
+      [...new Set(input.userIds)].map((userId) => ({
+        userId,
+        proposalId: input.proposalId,
+        type: 'property_alert',
+        title: input.title,
+        message: input.message,
+      })),
+    );
+  }
+
   async listByUser(userId: string) {
     return this.store.listByUser(userId);
   }

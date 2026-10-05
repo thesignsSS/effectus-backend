@@ -5,7 +5,8 @@ export type NotificationType =
   | 'proposal_resubmitted'
   | 'proposal_collaborator_added'
   | 'proposal_invitation_received'
-  | 'chat_message';
+  | 'chat_message'
+  | 'property_alert';
 
 export interface NotificationItem {
   id: string;

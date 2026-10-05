@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import type { AuthContext } from '../../src/app/modules/auth/auth-context.js';
+import type { LinkedProposal, PropertyAlerts, ProposalLinkGateway } from '../../src/app/modules/properties/domain/proposal-link.js';
 import type { Property, PropertyEvent } from '../../src/app/modules/properties/domain/property.js';
 import {
   DuplicateReferenceCode,
@@ -289,5 +291,63 @@ export class FakeStorage implements PhotoStorage {
   async remove(path: string) {
     this.removed.push(path);
     this.files.delete(path);
+  }
+}
+
+/** Propostas mínimas para a seção 13: dono, colaboradores, fase e imóvel. */
+export class InMemoryProposalLinks implements ProposalLinkGateway {
+  readonly proposals: (LinkedProposal & { collaborators: string[] })[] = [];
+
+  add(input: Partial<LinkedProposal> & { companyId: string; brokerUserId: string; collaborators?: string[] }): LinkedProposal {
+    const proposal = {
+      id: randomUUID(),
+      code: `PROP-${String(this.proposals.length + 1).padStart(3, '0')}`,
+      status: 'em_analise',
+      propertyId: null,
+      modality: null,
+      collaborators: [],
+      ...input,
+    };
+    this.proposals.push(proposal);
+    return proposal;
+  }
+
+  setStatus(id: string, status: string) {
+    const proposal = this.proposals.find((p) => p.id === id);
+    if (proposal) proposal.status = status;
+  }
+
+  remove(id: string) {
+    const index = this.proposals.findIndex((p) => p.id === id);
+    if (index >= 0) this.proposals.splice(index, 1);
+  }
+
+  async findAccessible(context: AuthContext, proposalId: string) {
+    const found = this.proposals.find((p) => p.id === proposalId && p.companyId === context.companyId);
+    if (!found) return null;
+    const allowed = context.isAdmin || found.brokerUserId === context.userId || found.collaborators.includes(context.userId);
+    return allowed ? { ...found } : null;
+  }
+
+  async findById(proposalId: string) {
+    const found = this.proposals.find((p) => p.id === proposalId);
+    return found ? { ...found } : null;
+  }
+
+  async setProperty(companyId: string, proposalId: string, propertyId: string | null) {
+    const found = this.proposals.find((p) => p.id === proposalId && p.companyId === companyId);
+    if (found) found.propertyId = propertyId;
+  }
+
+  async listByProperty(companyId: string, propertyId: string) {
+    return this.proposals.filter((p) => p.companyId === companyId && p.propertyId === propertyId).map((p) => ({ ...p }));
+  }
+}
+
+export class RecordingAlerts implements PropertyAlerts {
+  readonly sent: Parameters<PropertyAlerts['notify']>[0][] = [];
+
+  async notify(alert: Parameters<PropertyAlerts['notify']>[0]) {
+    this.sent.push(alert);
   }
 }
