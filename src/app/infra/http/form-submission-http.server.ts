@@ -3,8 +3,10 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { timingSafeEqual } from 'node:crypto';
 import { URL } from 'node:url';
+import { applyCors } from '../../modules/auth/cors.js';
+import { IdentityGuard, routeLabel } from '../../modules/auth/identity-guard.js';
+import { RequestAuthenticator } from '../../modules/auth/request-authenticator.js';
 import { Logger } from '../../domain/interfaces/logger.interface.js';
 import { ProfileStore } from '../../domain/interfaces/profile-store.interface.js';
 import { TeamStore } from '../../domain/interfaces/team-store.interface.js';
@@ -55,8 +57,8 @@ import {
 export interface FormSubmissionHttpServerConfig {
   port: number;
   maxBodyBytes: number;
-  apiKey?: string;
   effectusAppBaseUrl?: string;
+  corsAllowedOrigins: string[];
 }
 
 type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
@@ -79,6 +81,8 @@ export class FormSubmissionHttpServer {
 
   constructor(
     private readonly config: FormSubmissionHttpServerConfig,
+    private readonly authenticator: RequestAuthenticator,
+    private readonly identityGuard: IdentityGuard,
     private readonly processFormSubmission: ProcessFormSubmissionUseCase,
     private readonly processEngineeringRequest: ProcessEngineeringRequestUseCase,
     private readonly engineeringRequestStore: EngineeringRequestStore,
@@ -120,7 +124,7 @@ export class FormSubmissionHttpServer {
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
-    this.setCorsHeaders(response);
+    applyCors(request, response, this.config.corsAllowedOrigins);
 
     if (request.method === 'OPTIONS') {
       response.writeHead(204);
@@ -130,8 +134,12 @@ export class FormSubmissionHttpServer {
 
     const requestUrl = new URL(request.url ?? '/', 'http://localhost');
 
-    if (request.method === 'GET' && requestUrl.pathname === '/api/elias') {
-      this.sendJson(response, 200, { message: 'Elias Lindo' });
+    // `/api/elias` era o healthcheck informal; fica como alias até sair de uso.
+    if (
+      request.method === 'GET' &&
+      (requestUrl.pathname === '/health' || requestUrl.pathname === '/api/elias')
+    ) {
+      this.sendJson(response, 200, { ok: true });
       return;
     }
 
@@ -140,9 +148,29 @@ export class FormSubmissionHttpServer {
       return;
     }
 
-    if (!this.isAuthorized(request)) {
+    const auth = await this.authenticator.authenticate(request).catch((error: unknown) => {
+      this.logger.error('Falha ao autenticar requisição', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    });
+
+    if (!auth) {
+      this.sendJson(response, 503, { ok: false, error: 'Autenticação indisponível, tente de novo' });
+      return;
+    }
+
+    if (auth.kind === 'unauthenticated') {
       this.sendJson(response, 401, { ok: false, error: 'Não autorizado' });
       return;
+    }
+
+    if (auth.kind === 'user') {
+      this.identityGuard.applyToSearchParams(
+        requestUrl.searchParams,
+        auth.context,
+        routeLabel(request.method, requestUrl.pathname),
+      );
     }
 
     if (await this.leadAdsHttpHandler.handleAuthorized(request, response, requestUrl)) {
@@ -1791,7 +1819,14 @@ export class FormSubmissionHttpServer {
             return;
           }
 
-          resolve(parsed);
+          const context = this.authenticator.contextOf(request);
+          const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
+
+          resolve(
+            context
+              ? this.identityGuard.applyToBody(parsed, context, routeLabel(request.method, pathname))
+              : parsed,
+          );
         } catch {
           reject(new Error('JSON inválido'));
         }
@@ -1823,15 +1858,6 @@ export class FormSubmissionHttpServer {
       formData,
       documents,
     };
-  }
-
-  private setCorsHeaders(response: ServerResponse): void {
-    response.setHeader('Access-Control-Allow-Origin', '*');
-    response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
-    response.setHeader(
-      'Access-Control-Allow-Headers',
-      'Content-Type, Authorization, x-api-key',
-    );
   }
 
   private async handleListProposals(
@@ -2991,27 +3017,6 @@ export class FormSubmissionHttpServer {
     }
   }
 
-  private isAuthorized(request: IncomingMessage): boolean {
-    if (!this.config.apiKey) {
-      this.logger.error('FORM_SUBMISSION_API_KEY não configurada');
-      return false;
-    }
-
-    const authorization = request.headers.authorization;
-    const bearerToken = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
-    const apiKeyHeader = request.headers['x-api-key'];
-    const receivedApiKey = Array.isArray(apiKeyHeader)
-      ? apiKeyHeader[0]
-      : apiKeyHeader;
-    const token = bearerToken ?? receivedApiKey;
-
-    if (!token) {
-      return false;
-    }
-
-    return safeCompare(token, this.config.apiKey);
-  }
-
   private sendJson(
     response: ServerResponse,
     statusCode: number,
@@ -3641,16 +3646,6 @@ function readFormData(payload: JsonObject): Record<string, unknown> {
 
 function isJsonObject(value: unknown): value is JsonObject {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function safeCompare(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-
-  return (
-    leftBuffer.length === rightBuffer.length &&
-    timingSafeEqual(leftBuffer, rightBuffer)
-  );
 }
 
 function getRequiredPathSegment(

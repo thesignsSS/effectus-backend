@@ -13,7 +13,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  */
 export const EMPRESA_SUSPENSA = 'Empresa suspensa';
 
-type SituacaoEmpresa = {
+export type SituacaoEmpresa = {
   plan?: string | null;
   status?: string | null;
   trial_expira_em?: string | null;
@@ -34,7 +34,7 @@ type SituacaoEmpresa = {
  * `interno` passa antes de qualquer olhada em status ou data: é atribuído pela
  * Effectus e não passa por cobrança.
  */
-function temAcesso(empresa: SituacaoEmpresa, agora: Date): boolean {
+export function temAcesso(empresa: SituacaoEmpresa, agora: Date): boolean {
   if (empresa.plan === 'interno') return true;
 
   if (empresa.status === 'trial') {
@@ -54,7 +54,7 @@ function temAcesso(empresa: SituacaoEmpresa, agora: Date): boolean {
  * ativa)", que é contraditório e atrapalha quem for diagnosticar: empresa
  * `ativa` pode estar bloqueada por o período pago ter acabado.
  */
-function motivoDoBloqueio(empresa: SituacaoEmpresa): string {
+export function motivoDoBloqueio(empresa: SituacaoEmpresa): string {
   if (empresa.status === 'trial') return 'o período de teste terminou';
   if (empresa.status === 'ativa') return 'o período pago terminou';
 

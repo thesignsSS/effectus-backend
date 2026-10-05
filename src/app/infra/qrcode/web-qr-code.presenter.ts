@@ -12,6 +12,12 @@ import { QrCodePresenter } from '../../domain/interfaces/qr-code-presenter.inter
 
 interface WebQrCodePresenterConfig {
   port: number;
+  /**
+   * O painel não tem autenticação e expõe o QR de pareamento do WhatsApp e os
+   * documentos recebidos. Fora do desenvolvimento local, fica em `127.0.0.1`:
+   * o app consulta o estado pela API autenticada (`/api/admin/whatsapp/state`).
+   */
+  host: string;
   frontendDir: string;
   loadDocuments?: () => Promise<DashboardDocument[]>;
 }
@@ -75,9 +81,9 @@ export class WebQrCodePresenter implements QrCodePresenter, DashboardPresenter {
       this.serveFrontendFile(url.pathname, response);
     });
 
-    this.server.listen(this.config.port, () => {
+    this.server.listen(this.config.port, this.config.host, () => {
       this.logger.info('QR Code web frontend disponível', {
-        url: `http://localhost:${this.config.port}`,
+        url: `http://${this.config.host}:${this.config.port}`,
       });
     });
   }

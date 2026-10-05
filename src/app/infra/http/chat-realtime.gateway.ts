@@ -1,10 +1,10 @@
 import http from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
 import { URL } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { ChatConversationSummary, ChatMessageItem } from '../../domain/interfaces/chat-store.interface.js';
 import { Logger } from '../../domain/interfaces/logger.interface.js';
 import { NotificationItem } from '../../domain/interfaces/notification-store.interface.js';
+import { RequestAuthenticator } from '../../modules/auth/request-authenticator.js';
 
 type ChatSocketMessage =
   | {
@@ -43,16 +43,12 @@ type OutboundEvent =
       isOnline: boolean;
     };
 
-export interface ChatRealtimeGatewayConfig {
-  apiKey?: string;
-}
-
 export class ChatRealtimeGateway {
   private readonly webSocketServer = new WebSocketServer({ noServer: true });
   private readonly socketsByUserId = new Map<string, Set<WebSocket>>();
 
   constructor(
-    private readonly config: ChatRealtimeGatewayConfig,
+    private readonly authenticator: RequestAuthenticator,
     private readonly logger: Logger,
   ) {
     this.webSocketServer.on('connection', (
@@ -73,19 +69,42 @@ export class ChatRealtimeGateway {
         return;
       }
 
-      const apiKey = requestUrl.searchParams.get('apiKey') ?? '';
-      const userId = requestUrl.searchParams.get('userId')?.trim() ?? '';
+      void this.resolveUserId(requestUrl)
+        .catch((error: unknown) => {
+          this.logger.error('Falha ao autenticar websocket do chat', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return null;
+        })
+        .then((userId) => {
+          if (!userId) {
+            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+            socket.destroy();
+            return;
+          }
 
-      if (!this.isAuthorized(apiKey) || !userId) {
-        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-        socket.destroy();
-        return;
-      }
-
-      this.webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
-        this.webSocketServer.emit('connection', webSocket, request, userId);
-      });
+          this.webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+            this.webSocketServer.emit('connection', webSocket, request, userId);
+          });
+        });
     });
+  }
+
+  /**
+   * Navegador não manda header em websocket, então a credencial vem na query.
+   * Com JWT (`token`), o usuário sai do token e `userId` é ignorado. A chave
+   * antiga (`apiKey` + `userId`) só vale durante a transição do PRD.
+   */
+  private async resolveUserId(requestUrl: URL): Promise<string | null> {
+    const token = requestUrl.searchParams.get('token')?.trim();
+    const apiKey = requestUrl.searchParams.get('apiKey')?.trim();
+    const result = await this.authenticator.authenticateToken(token || apiKey || null);
+
+    if (result.kind === 'user') return result.context.userId;
+
+    if (result.kind === 'legacy') return requestUrl.searchParams.get('userId')?.trim() || null;
+
+    return null;
   }
 
   emitChatMessage(userIds: string[], payload: {
@@ -191,18 +210,4 @@ export class ChatRealtimeGateway {
     }
   }
 
-  private isAuthorized(receivedApiKey: string) {
-    if (!this.config.apiKey) {
-      return false;
-    }
-
-    const configured = Buffer.from(this.config.apiKey);
-    const received = Buffer.from(receivedApiKey);
-
-    if (configured.length !== received.length) {
-      return false;
-    }
-
-    return timingSafeEqual(configured, received);
-  }
 }

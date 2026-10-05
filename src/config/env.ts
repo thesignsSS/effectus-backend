@@ -17,6 +17,16 @@ export interface Env {
   formSubmissionHttpPort: number;
   formSubmissionMaxBodyMb: number;
   formSubmissionApiKey?: string;
+  /** Segredo HS256 do Supabase: valida o JWT localmente (PRD de autenticação, RNF1). */
+  supabaseJwtSecret?: string;
+  /** Fase 1 do PRD: a chave antiga ainda vale. Desligar na fase 3. */
+  acceptLegacyApiKey: boolean;
+  /** Fase 2 do PRD: `log` só registra identidade divergente; `enforce` usa a do token. */
+  identityMode: 'log' | 'enforce';
+  /** Vazio mantém `*`. */
+  corsAllowedOrigins: string[];
+  /** Painel do QR não tem autenticação: por padrão só escuta dentro do container. */
+  qrCodeWebHost: string;
   documentProcessingConcurrency: number;
   storageProvider: StorageProviderMode;
   oneDriveProvider: OneDriveProviderMode;
@@ -65,6 +75,14 @@ export const env: Env = {
   formSubmissionHttpPort: Number(3335),
   formSubmissionMaxBodyMb: Number(process.env.FORM_SUBMISSION_MAX_BODY_MB ?? 50),
   formSubmissionApiKey: process.env.FORM_SUBMISSION_API_KEY,
+  supabaseJwtSecret: process.env.SUPABASE_JWT_SECRET || undefined,
+  acceptLegacyApiKey: (process.env.ACCEPT_LEGACY_API_KEY ?? 'true').toLowerCase() !== 'false',
+  identityMode: process.env.IDENTITY_MODE === 'enforce' ? 'enforce' : 'log',
+  corsAllowedOrigins: (process.env.CORS_ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+  qrCodeWebHost: process.env.QR_CODE_WEB_HOST ?? '127.0.0.1',
   documentProcessingConcurrency: Math.max(
     1,
     Number(process.env.DOCUMENT_PROCESSING_CONCURRENCY ?? 1),
