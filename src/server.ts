@@ -55,6 +55,22 @@ import {
 import { SupabaseAuthContextResolver } from './app/modules/auth/auth-context.js';
 import { RequestAuthenticator } from './app/modules/auth/request-authenticator.js';
 import { IdentityGuard } from './app/modules/auth/identity-guard.js';
+import { PropertyService } from './app/modules/properties/application/property.service.js';
+import { PropertiesRouter } from './app/modules/properties/http/properties.router.js';
+import { IbgeMunicipalityDirectory } from './app/modules/properties/infra/ibge-municipality.directory.js';
+import { SupabasePropertyRepository } from './app/modules/properties/infra/supabase-property.repository.js';
+import { PropertyPhotoService } from './app/modules/properties/application/property-photo.service.js';
+import { PropertyListService } from './app/modules/properties/application/property-list.service.js';
+import { PropertyLifecycleService } from './app/modules/properties/application/property-lifecycle.service.js';
+import {
+  SupabasePhotoStorage,
+  SupabasePropertyPhotoRepository,
+} from './app/modules/properties/infra/supabase-property-photos.js';
+import { PropertySituationService } from './app/modules/properties/application/property-situation.service.js';
+import { ProposalPropertyService } from './app/modules/properties/application/proposal-property.service.js';
+import { ProposalPropertyRouter } from './app/modules/properties/http/proposal-property.router.js';
+import { SupabaseProposalLinkGateway } from './app/modules/properties/infra/supabase-proposal-link.gateway.js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 export function buildApp(): WhatsAppController {
   const logger = new ConsoleLogger();
@@ -131,6 +147,10 @@ export function buildApp(): WhatsAppController {
   const teamStore = new SupabaseTeamStore({
     url: env.supabaseUrl,
     serviceRoleKey: env.supabaseServiceRoleKey,
+    // Decisão 10 (BKL-093): imóveis de quem sai passam ao dono do plano antes da exclusão.
+    beforeRemoveMember: async ({ companyId, userId, ownerId }) => {
+      await propertyLifecycleService.reassignFromDepartingBroker(companyId, userId, ownerId);
+    },
   });
   const proposalStore = new SupabaseProposalStore({
     url: env.supabaseUrl,
@@ -161,7 +181,38 @@ export function buildApp(): WhatsAppController {
     serviceRoleKey: env.supabaseServiceRoleKey,
   }, proposalStore, logger);
   proposalEmailReplySyncService.start();
-  const authenticator = buildAuthenticator(logger);
+  const serviceClient = buildServiceClient();
+  const authenticator = buildAuthenticator(serviceClient, logger);
+  const propertyRepository = new SupabasePropertyRepository(serviceClient);
+  const propertyPhotoRepository = new SupabasePropertyPhotoRepository(serviceClient);
+  const propertyService = new PropertyService(
+    propertyRepository,
+    new IbgeMunicipalityDirectory(logger),
+    logger,
+    propertyPhotoRepository,
+  );
+  const photoStorage = new SupabasePhotoStorage(serviceClient);
+  const propertyPhotoService = new PropertyPhotoService(propertyRepository, propertyPhotoRepository, photoStorage, logger);
+  const propertyListService = new PropertyListService(propertyRepository, propertyPhotoRepository, photoStorage);
+  const propertyLifecycleService = new PropertyLifecycleService(
+    propertyRepository,
+    propertyPhotoRepository,
+    photoStorage,
+    logger,
+  );
+  const proposalLinkGateway = new SupabaseProposalLinkGateway(serviceClient);
+  const proposalPropertyService = new ProposalPropertyService(
+    propertyRepository,
+    proposalLinkGateway,
+    new PropertySituationService(
+      propertyRepository,
+      proposalLinkGateway,
+      { notify: async (alert) => void (await notificationService.notifyUsersAboutProperty(alert)) },
+      logger,
+    ),
+    propertyListService,
+    logger,
+  );
   const chatRealtimeGateway = new ChatRealtimeGateway(authenticator, logger);
   const processFormSubmission = new ProcessFormSubmissionUseCase(
     oneDriveService,
@@ -211,6 +262,11 @@ export function buildApp(): WhatsAppController {
     proposalEmailReplySyncService,
     new LeadAdsHttpHandler(buildLeadAdsService(logger), logger),
     logger,
+    [
+      new PropertiesRouter(propertyService, propertyPhotoService, propertyListService, propertyLifecycleService, logger),
+      new ProposalPropertyRouter(proposalPropertyService, logger),
+    ],
+    proposalPropertyService,
   ).start();
   const remittanceSessionService = new RemittanceSessionService();
   const customerRegistrationExtractor = new OpenRouterCustomerRegistrationClient(
@@ -313,15 +369,18 @@ function buildStorageProvider(logger: ConsoleLogger) {
    */
 }
 
-function buildAuthenticator(logger: ConsoleLogger): RequestAuthenticator {
+/** Cliente com a service role, compartilhado pela autenticação e pelos módulos novos. */
+function buildServiceClient(): SupabaseClient {
   if (!env.supabaseUrl || !env.supabaseServiceRoleKey) {
     throw new Error('SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY são obrigatórios para autenticar a API');
   }
 
-  const client = createClient(env.supabaseUrl, env.supabaseServiceRoleKey, {
+  return createClient(env.supabaseUrl, env.supabaseServiceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+}
 
+function buildAuthenticator(client: SupabaseClient, logger: ConsoleLogger): RequestAuthenticator {
   if (!env.supabaseJwtSecret) {
     logger.warn('SUPABASE_JWT_SECRET ausente: JWT validado no Supabase a cada sessão nova (mais lento)');
   }
