@@ -404,9 +404,6 @@ export class SupabaseProposalStore implements ProposalStore {
     const sharedProposalIds = access.isAdmin
       ? []
       : await this.listSharedProposalIds(input.brokerUserId);
-    const accessibleProposalIds = access.isAdmin
-      ? []
-      : await this.listAccessibleProposalIds(input.brokerUserId);
     const from = (input.page - 1) * input.pageSize;
     const to = from + input.pageSize - 1;
     let query = this.client
@@ -422,8 +419,9 @@ export class SupabaseProposalStore implements ProposalStore {
       if (input.ownerBrokerUserId) {
         query = query.eq('broker_user_id', input.ownerBrokerUserId);
       }
-    } else {
-      if (accessibleProposalIds.length === 0) {
+    } else if (input.ownerBrokerUserId && input.ownerBrokerUserId !== input.brokerUserId) {
+      // Propostas de outro corretor só são visíveis se compartilhadas com o chamador.
+      if (sharedProposalIds.length === 0) {
         return {
           items: [],
           total: 0,
@@ -432,11 +430,15 @@ export class SupabaseProposalStore implements ProposalStore {
         };
       }
 
-      query = query.in('id', accessibleProposalIds);
-
-      if (input.ownerBrokerUserId) {
-        query = query.eq('broker_user_id', input.ownerBrokerUserId);
-      }
+      query = query.eq('broker_user_id', input.ownerBrokerUserId).in('id', sharedProposalIds);
+    } else if (sharedProposalIds.length === 0) {
+      query = query.eq('broker_user_id', input.brokerUserId);
+    } else {
+      // Evita listar todas as propostas próprias para montar um .in() gigante:
+      // soma-se apenas o conjunto (tipicamente pequeno) de propostas compartilhadas.
+      query = query.or(
+        `broker_user_id.eq.${input.brokerUserId},id.in.(${sharedProposalIds.join(',')})`,
+      );
     }
 
     const normalizedSearch = input.search?.trim();
@@ -521,20 +523,21 @@ export class SupabaseProposalStore implements ProposalStore {
 
   async countPendingByBroker(input: { brokerUserId: string }): Promise<number> {
     const access = await this.resolveAccess(input.brokerUserId);
-    const accessibleProposalIds = access.isAdmin
-      ? []
-      : await this.listAccessibleProposalIds(input.brokerUserId);
     let query = this.client
       .from('proposals')
       .select('id', { count: 'exact', head: true })
       .eq('status', 'pendente');
 
     if (!access.isAdmin) {
-      if (accessibleProposalIds.length === 0) {
-        return 0;
-      }
+      const sharedProposalIds = await this.listSharedProposalIds(input.brokerUserId);
 
-      query = query.in('id', accessibleProposalIds);
+      if (sharedProposalIds.length === 0) {
+        query = query.eq('broker_user_id', input.brokerUserId);
+      } else {
+        query = query.or(
+          `broker_user_id.eq.${input.brokerUserId},id.in.(${sharedProposalIds.join(',')})`,
+        );
+      }
     }
 
     const { count, error } = await query;
@@ -1910,28 +1913,6 @@ export class SupabaseProposalStore implements ProposalStore {
     return ((data as Array<{ proposal_id: string }> | null) ?? []).map(
       (item) => item.proposal_id,
     );
-  }
-
-  private async listAccessibleProposalIds(userId: string): Promise<string[]> {
-    const [sharedProposalIds, ownedProposalIds] = await Promise.all([
-      this.listSharedProposalIds(userId),
-      this.listOwnedProposalIds(userId),
-    ]);
-
-    return Array.from(new Set([...ownedProposalIds, ...sharedProposalIds]));
-  }
-
-  private async listOwnedProposalIds(userId: string): Promise<string[]> {
-    const { data, error } = await this.client
-      .from('proposals')
-      .select('id')
-      .eq('broker_user_id', userId);
-
-    if (error) {
-      throw new Error(`Supabase owned proposals list failed: ${error.message}`);
-    }
-
-    return ((data as Array<{ id: string }> | null) ?? []).map((item) => item.id);
   }
 
   private async hasProposalCollaborator(proposalId: string, userId: string): Promise<boolean> {
